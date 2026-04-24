@@ -1,0 +1,1039 @@
+from __future__ import annotations
+
+import asyncio
+import inspect
+import json
+import logging
+import re
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import suppress
+from enum import StrEnum
+from threading import Lock
+from typing import Any
+
+import httpx
+import torch
+from pydantic import BaseModel, ConfigDict, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from torch import Tensor, nn
+from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase
+
+LOGGER = logging.getLogger(__name__)
+
+_LAYER_PATTERNS = (
+    re.compile(r"layers\.(\d+)\."),
+    re.compile(r"h\.(\d+)\."),
+    re.compile(r"blocks\.(\d+)\."),
+)
+
+
+class GenerationBackend(StrEnum):
+    OLLAMA = "ollama"
+    HUGGINGFACE = "huggingface"
+
+
+class AnalysisMode(StrEnum):
+    INLINE = "inline"
+    SHADOW = "shadow"
+
+
+class GenerationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prompt: str = Field(min_length=1)
+    system_prompt: str | None = None
+    max_new_tokens: int = Field(default=160, ge=1, le=2048)
+    temperature: float = Field(default=0.2, ge=0.0, le=2.0)
+    top_p: float = Field(default=0.95, gt=0.0, le=1.0)
+    stop: list[str] = Field(default_factory=list)
+    stream: bool = True
+
+
+class HeadMask(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    layer_index: int = Field(ge=0)
+    layer_name: str
+    head_index: int = Field(ge=0)
+    head_name: str
+    reason: str | None = None
+
+
+class LayerTopology(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    layer_index: int = Field(ge=0)
+    layer_name: str
+    head_count: int = Field(ge=1)
+    head_dim: int = Field(ge=1)
+
+
+class ModelTopology(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model_name: str
+    device: str
+    total_layers: int = Field(ge=0)
+    total_heads: int = Field(ge=0)
+    layers: list[LayerTopology] = Field(default_factory=list)
+
+
+class HeadActivation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    head_index: int = Field(ge=0)
+    head_name: str
+    masked: bool = False
+    max_attention_score: float
+    mean_attention_score: float
+    l2_norm: float
+    top_source_positions: list[int] = Field(default_factory=list)
+    raw_last_token_attention: list[float] = Field(default_factory=list)
+
+
+class LayerActivation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    layer_index: int = Field(ge=0)
+    layer_name: str
+    sequence_length: int = Field(ge=1)
+    head_count: int = Field(ge=1)
+    masked_head_names: list[str] = Field(default_factory=list)
+    top_heads: list[HeadActivation] = Field(default_factory=list)
+    full_last_token_attention_matrix: list[list[float]] | None = None
+
+
+class TokenStepCapture(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    step_index: int = Field(ge=0)
+    generated_token: str
+    generated_token_id: int = Field(ge=0)
+    prompt_plus_generation_length: int = Field(ge=1)
+    masked_heads: list[str] = Field(default_factory=list)
+    layers: list[LayerActivation] = Field(default_factory=list)
+    high_activation_path: list[str] = Field(default_factory=list)
+
+
+class AttentionTrace(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_prompt: str
+    generation_model: str
+    analysis_model: str
+    generation_backend: GenerationBackend
+    analysis_mode: AnalysisMode
+    prompt_token_count: int = Field(ge=1)
+    generated_text: str = ""
+    analysis_error: str | None = None
+    steps: list[TokenStepCapture] = Field(default_factory=list)
+
+
+class GenerationChunk(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    backend: GenerationBackend
+    model: str
+    token: str = ""
+    done: bool = False
+    trace_step: TokenStepCapture | None = None
+    trace: AttentionTrace | None = None
+
+
+class InferenceResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    backend: GenerationBackend
+    generation_model: str
+    analysis_model: str
+    text: str
+    trace: AttentionTrace
+
+
+class InferenceSettings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix="SYNAPSE_",
+        env_file=[".env", "backend/.env", "../.env"],
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    use_ollama_if_available: bool = True
+    ollama_base_url: str = "http://127.0.0.1:11434"
+    ollama_health_path: str = "/api/version"
+    ollama_model: str = "qwen2.5:3b-instruct"
+    ollama_request_timeout_seconds: float = 120.0
+    ollama_health_timeout_seconds: float = 2.0
+
+    hf_model_name: str = "Qwen/Qwen2.5-1.5B-Instruct"
+    hf_revision: str | None = None
+    hf_local_files_only: bool = False
+    hf_device: str | None = None
+    hf_dtype: str | None = None
+    hf_trust_remote_code: bool = False
+    hf_attention_implementation: str = "eager"
+    hf_enable_chat_template: bool = True
+
+    capture_top_k_heads: int = 6
+    capture_top_k_positions: int = 8
+    capture_context_window: int = 128
+    capture_activation_threshold: float = 0.0
+    capture_full_attention_matrix: bool = False
+
+    preload_shadow_model: bool = False
+    shadow_max_new_tokens: int | None = None
+
+
+StepListener = Callable[[TokenStepCapture], Awaitable[None] | None]
+
+
+class HeadMaskStore:
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._masked_heads: set[tuple[int, int]] = set()
+
+    def replace(self, masked_heads: set[tuple[int, int]]) -> None:
+        with self._lock:
+            self._masked_heads = set(masked_heads)
+
+    def snapshot(self) -> set[tuple[int, int]]:
+        with self._lock:
+            return set(self._masked_heads)
+
+    def snapshot_grouped(self) -> dict[int, set[int]]:
+        return _group_mask_heads(self.snapshot())
+
+    def snapshot_models(self) -> list[HeadMask]:
+        masked_models = [
+            HeadMask(
+                layer_index=layer_index,
+                layer_name=f"Layer_{layer_index + 1}",
+                head_index=head_index,
+                head_name=f"Head_{head_index + 1}",
+            )
+            for layer_index, head_index in sorted(self.snapshot())
+        ]
+        return masked_models
+
+
+class OllamaClient:
+    def __init__(self, settings: InferenceSettings) -> None:
+        self._settings = settings
+        self._client = httpx.AsyncClient(
+            base_url=settings.ollama_base_url,
+            timeout=settings.ollama_request_timeout_seconds,
+        )
+
+    async def close(self) -> None:
+        await self._client.aclose()
+
+    async def is_available(self) -> bool:
+        try:
+            response = await self._client.get(
+                self._settings.ollama_health_path,
+                timeout=self._settings.ollama_health_timeout_seconds,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError:
+            return False
+        return True
+
+    async def stream_generate(self, request: GenerationRequest) -> AsyncIterator[GenerationChunk]:
+        payload = {
+            "model": self._settings.ollama_model,
+            "prompt": request.prompt,
+            "stream": True,
+            "options": {
+                "temperature": request.temperature,
+                "top_p": request.top_p,
+                "num_predict": request.max_new_tokens,
+                "stop": request.stop,
+            },
+        }
+        if request.system_prompt:
+            payload["system"] = request.system_prompt
+
+        async with self._client.stream("POST", "/api/generate", json=payload) as response:
+            if response.status_code >= 400:
+                body_bytes = await response.aread()
+                body_text = body_bytes.decode("utf-8", errors="replace")
+                raise RuntimeError(
+                    f"Ollama generation failed ({response.status_code}): {body_text.strip()}"
+                )
+
+            async for line in response.aiter_lines():
+                if not line:
+                    continue
+
+                chunk = json.loads(line)
+                token = chunk.get("response", "")
+                done = bool(chunk.get("done", False))
+
+                if token:
+                    yield GenerationChunk(
+                        backend=GenerationBackend.OLLAMA,
+                        model=self._settings.ollama_model,
+                        token=token,
+                    )
+
+                if done:
+                    return
+
+
+class _TraceSession:
+    def __init__(self, context_window: int, masked_heads_by_layer: dict[int, set[int]]) -> None:
+        self.context_window = context_window
+        self.masked_heads_by_layer = masked_heads_by_layer
+        self.current_layer_slices: dict[int, Tensor] = {}
+
+
+class HookedTransformerRunner:
+    def __init__(self, settings: InferenceSettings) -> None:
+        self._settings = settings
+        self._device = settings.hf_device or _resolve_device()
+        self._dtype = _resolve_dtype(settings.hf_dtype, self._device)
+        self._tokenizer: PreTrainedTokenizerBase | None = None
+        self._model: PreTrainedModel | None = None
+        self._load_lock = asyncio.Lock()
+        self._generation_lock = asyncio.Lock()
+        self._hook_handles: list[Any] = []
+        self._active_trace_session: _TraceSession | None = None
+        self._mask_store = HeadMaskStore()
+        self._model_topology: ModelTopology | None = None
+
+    async def ensure_loaded(self) -> None:
+        if self._model is not None and self._tokenizer is not None:
+            return
+
+        async with self._load_lock:
+            if self._model is not None and self._tokenizer is not None:
+                return
+            await asyncio.to_thread(self._load_sync)
+
+    async def close(self) -> None:
+        for handle in self._hook_handles:
+            handle.remove()
+        self._hook_handles.clear()
+        self._model = None
+        self._tokenizer = None
+        self._model_topology = None
+
+    async def get_model_topology(self) -> ModelTopology:
+        await self.ensure_loaded()
+        if self._model_topology is None:
+            raise RuntimeError("Model topology is unavailable even though the model is loaded.")
+        return self._model_topology
+
+    async def replace_masked_heads(self, masked_heads: set[tuple[int, int]]) -> list[HeadMask]:
+        self._mask_store.replace(masked_heads)
+        return self._mask_store.snapshot_models()
+
+    def get_masked_heads(self) -> list[HeadMask]:
+        return self._mask_store.snapshot_models()
+
+    async def capture_trace(
+        self,
+        request: GenerationRequest,
+        *,
+        analysis_mode: AnalysisMode,
+        step_listener: StepListener | None = None,
+    ) -> AttentionTrace:
+        trace: AttentionTrace | None = None
+        async for chunk in self.generate_stream(
+            request,
+            analysis_mode=analysis_mode,
+            step_listener=step_listener,
+        ):
+            if chunk.trace is not None:
+                trace = chunk.trace
+
+        if trace is None:
+            raise RuntimeError("The hook runner completed without a final trace payload.")
+        return trace
+
+    async def generate_stream(
+        self,
+        request: GenerationRequest,
+        *,
+        analysis_mode: AnalysisMode,
+        step_listener: StepListener | None = None,
+    ) -> AsyncIterator[GenerationChunk]:
+        await self.ensure_loaded()
+        tokenizer = self._require_tokenizer()
+        model = self._require_model()
+
+        prompt_text = self._render_prompt(request.prompt, request.system_prompt)
+        encoded = tokenizer(prompt_text, return_tensors="pt")
+        input_ids = encoded["input_ids"].to(self._device)
+        attention_mask = encoded["attention_mask"].to(self._device)
+        prompt_token_count = int(input_ids.shape[1])
+
+        trace = AttentionTrace(
+            source_prompt=request.prompt,
+            generation_model=self._settings.hf_model_name,
+            analysis_model=self._settings.hf_model_name,
+            generation_backend=GenerationBackend.HUGGINGFACE,
+            analysis_mode=analysis_mode,
+            prompt_token_count=prompt_token_count,
+        )
+
+        generated_text_parts: list[str] = []
+        eos_token_id = tokenizer.eos_token_id
+
+        async with self._generation_lock:
+            self._active_trace_session = _TraceSession(
+                context_window=self._settings.capture_context_window,
+                masked_heads_by_layer=self._mask_store.snapshot_grouped(),
+            )
+            try:
+                for step_index in range(request.max_new_tokens):
+                    self._active_trace_session.current_layer_slices.clear()
+                    outputs = await asyncio.to_thread(
+                        self._forward_sync,
+                        model,
+                        input_ids,
+                        attention_mask,
+                    )
+
+                    next_token_id = self._sample_next_token(
+                        outputs.logits[:, -1, :],
+                        request.temperature,
+                        request.top_p,
+                    )
+
+                    is_eos = eos_token_id is not None and next_token_id == eos_token_id
+                    token_text = "" if is_eos else tokenizer.decode(
+                        [next_token_id],
+                        skip_special_tokens=False,
+                    )
+
+                    if token_text:
+                        generated_text_parts.append(token_text)
+                        trace.generated_text += token_text
+
+                    step_capture = self._build_step_capture(
+                        step_index=step_index,
+                        generated_token=token_text,
+                        generated_token_id=next_token_id,
+                        prompt_plus_generation_length=prompt_token_count + step_index + 1,
+                    )
+                    trace.steps.append(step_capture)
+
+                    if step_listener is not None:
+                        callback_result = step_listener(step_capture)
+                        if inspect.isawaitable(callback_result):
+                            await callback_result
+
+                    if token_text:
+                        yield GenerationChunk(
+                            backend=GenerationBackend.HUGGINGFACE,
+                            model=self._settings.hf_model_name,
+                            token=token_text,
+                            trace_step=step_capture,
+                        )
+
+                    next_token_tensor = torch.tensor(
+                        [[next_token_id]],
+                        device=input_ids.device,
+                        dtype=input_ids.dtype,
+                    )
+                    input_ids = torch.cat((input_ids, next_token_tensor), dim=-1)
+                    attention_mask = torch.cat(
+                        (
+                            attention_mask,
+                            torch.ones((1, 1), device=attention_mask.device, dtype=attention_mask.dtype),
+                        ),
+                        dim=-1,
+                    )
+
+                    if is_eos or _matches_any_stop_sequence("".join(generated_text_parts), request.stop):
+                        break
+
+                yield GenerationChunk(
+                    backend=GenerationBackend.HUGGINGFACE,
+                    model=self._settings.hf_model_name,
+                    done=True,
+                    trace=trace,
+                )
+            finally:
+                self._active_trace_session = None
+
+    def _load_sync(self) -> None:
+        tokenizer_load_kwargs: dict[str, Any] = {
+            "trust_remote_code": self._settings.hf_trust_remote_code,
+            "local_files_only": self._settings.hf_local_files_only,
+        }
+        if self._settings.hf_revision:
+            tokenizer_load_kwargs["revision"] = self._settings.hf_revision
+
+        # Normalize HF model name: strip any colon-qualified tags (e.g. 'name:tag')
+        # which are invalid as Hugging Face repo ids. If a colon appears, use the
+        # prefix as the repo id and log a warning for the user.
+        hf_name_raw = self._settings.hf_model_name or ""
+        hf_name_to_load = hf_name_raw
+        if ":" in hf_name_raw:
+            hf_name_to_load = hf_name_raw.split(":", 1)[0]
+            LOGGER.warning(
+                "HuggingFace model name '%s' contains ':'; using '%s' for hub operations.",
+                hf_name_raw,
+                hf_name_to_load,
+            )
+
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(
+                hf_name_to_load,
+                **tokenizer_load_kwargs,
+            )
+            if tokenizer.pad_token is None and tokenizer.eos_token is not None:
+                tokenizer.pad_token = tokenizer.eos_token
+
+            model_load_kwargs: dict[str, Any] = {
+                "torch_dtype": self._dtype,
+                "trust_remote_code": self._settings.hf_trust_remote_code,
+                "local_files_only": self._settings.hf_local_files_only,
+                "low_cpu_mem_usage": True,
+            }
+            if self._settings.hf_revision:
+                model_load_kwargs["revision"] = self._settings.hf_revision
+
+            try:
+                model = AutoModelForCausalLM.from_pretrained(
+                    hf_name_to_load,
+                    attn_implementation=self._settings.hf_attention_implementation,
+                    **model_load_kwargs,
+                )
+            except TypeError:
+                model = AutoModelForCausalLM.from_pretrained(
+                    hf_name_to_load,
+                    **model_load_kwargs,
+                )
+
+            model.to(self._device)
+            model.eval()
+
+            self._tokenizer = tokenizer
+            self._model = model
+            self._register_attention_hooks(model)
+            self._model_topology = self._inspect_model_topology(model)
+        except Exception as exc:
+            LOGGER.exception("Failed to load HuggingFace model '%s': %s", self._settings.hf_model_name, exc)
+            # Try a safe fallback to a small public model so the visualizer has a topology.
+            fallback_candidate = "gpt2"
+            if not self._settings.hf_local_files_only and self._settings.hf_model_name != fallback_candidate:
+                try:
+                    LOGGER.info("Attempting fallback HuggingFace model '%s'", fallback_candidate)
+                    tokenizer = AutoTokenizer.from_pretrained(fallback_candidate)
+                    if tokenizer.pad_token is None and tokenizer.eos_token is not None:
+                        tokenizer.pad_token = tokenizer.eos_token
+
+                    model_load_kwargs = {
+                        "torch_dtype": self._dtype,
+                        "trust_remote_code": self._settings.hf_trust_remote_code,
+                        "local_files_only": False,
+                        "low_cpu_mem_usage": True,
+                    }
+                    try:
+                        model = AutoModelForCausalLM.from_pretrained(
+                            fallback_candidate,
+                            attn_implementation=self._settings.hf_attention_implementation,
+                            **model_load_kwargs,
+                        )
+                    except TypeError:
+                        model = AutoModelForCausalLM.from_pretrained(fallback_candidate, **model_load_kwargs)
+
+                    model.to(self._device)
+                    model.eval()
+                    self._tokenizer = tokenizer
+                    self._model = model
+                    self._register_attention_hooks(model)
+                    self._model_topology = self._inspect_model_topology(model)
+                    LOGGER.info("Fallback model '%s' loaded successfully.", fallback_candidate)
+                    return
+                except Exception as exc2:
+                    LOGGER.exception("Fallback HuggingFace model '%s' failed: %s", fallback_candidate, exc2)
+
+            # Final fallback: minimal topology so the runtime can continue without HF tracing.
+            self._tokenizer = None
+            self._model = None
+            self._model_topology = ModelTopology(
+                model_name=self._settings.hf_model_name,
+                device="unavailable",
+                total_layers=0,
+                total_heads=0,
+                layers=[],
+            )
+
+    def _register_attention_hooks(self, model: PreTrainedModel) -> None:
+        for handle in self._hook_handles:
+            handle.remove()
+        self._hook_handles.clear()
+
+        for module_name, module in model.named_modules():
+            if not _is_attention_module(module_name, module):
+                continue
+            layer_index = _extract_layer_index(module_name)
+            if layer_index is None:
+                continue
+            handle = module.register_forward_hook(self._make_attention_hook(module_name))
+            self._hook_handles.append(handle)
+            projection_module = getattr(module, "o_proj", None) or getattr(module, "out_proj", None)
+            if isinstance(projection_module, nn.Module):
+                mask_handle = projection_module.register_forward_pre_hook(
+                    self._make_projection_mask_hook(layer_index, module)
+                )
+                self._hook_handles.append(mask_handle)
+
+    def _make_attention_hook(self, module_name: str) -> Callable[[nn.Module, tuple[Any, ...], Any], None]:
+        layer_index = _extract_layer_index(module_name)
+
+        def hook(_module: nn.Module, _inputs: tuple[Any, ...], output: Any) -> None:
+            if layer_index is None or self._active_trace_session is None:
+                return
+            attention_tensor = _extract_attention_tensor(output)
+            if attention_tensor is None or attention_tensor.ndim != 4 or attention_tensor.shape[0] == 0:
+                return
+
+            detached = attention_tensor.detach().to(device="cpu", dtype=torch.float32)
+            last_query = detached[0, :, -1, :]
+            masked_heads = self._active_trace_session.masked_heads_by_layer.get(layer_index, set())
+            for head_index in masked_heads:
+                if 0 <= head_index < last_query.shape[0]:
+                    last_query[head_index] = 0
+            if last_query.shape[-1] > self._active_trace_session.context_window:
+                last_query = last_query[:, -self._active_trace_session.context_window :]
+            self._active_trace_session.current_layer_slices[layer_index] = last_query.contiguous()
+
+        return hook
+
+    def _make_projection_mask_hook(
+        self,
+        layer_index: int,
+        attention_module: nn.Module,
+    ) -> Callable[[nn.Module, tuple[Any, ...]], tuple[Any, ...] | None]:
+        num_heads = int(getattr(attention_module, "num_heads", 0))
+        head_dim = int(getattr(attention_module, "head_dim", 0))
+
+        def hook(_module: nn.Module, inputs: tuple[Any, ...]) -> tuple[Any, ...] | None:
+            if (
+                self._active_trace_session is None
+                or not inputs
+                or num_heads <= 0
+                or head_dim <= 0
+            ):
+                return None
+
+            masked_heads = self._active_trace_session.masked_heads_by_layer.get(layer_index)
+            if not masked_heads:
+                return None
+
+            hidden_states = inputs[0]
+            if not isinstance(hidden_states, Tensor) or hidden_states.ndim != 3:
+                return None
+
+            masked_hidden_states = hidden_states.clone()
+            expected_width = num_heads * head_dim
+            if masked_hidden_states.shape[-1] < expected_width:
+                return None
+
+            for head_index in masked_heads:
+                if not 0 <= head_index < num_heads:
+                    continue
+                start = head_index * head_dim
+                end = start + head_dim
+                masked_hidden_states[..., start:end] = 0
+
+            return (masked_hidden_states, *inputs[1:])
+
+        return hook
+
+    def _forward_sync(
+        self,
+        model: PreTrainedModel,
+        input_ids: Tensor,
+        attention_mask: Tensor,
+    ) -> Any:
+        with torch.inference_mode():
+            return model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                output_attentions=True,
+                use_cache=False,
+                return_dict=True,
+            )
+
+    def _sample_next_token(self, logits: Tensor, temperature: float, top_p: float) -> int:
+        if temperature <= 0:
+            return int(torch.argmax(logits, dim=-1).item())
+
+        scaled_logits = logits / max(temperature, 1e-6)
+        probabilities = torch.softmax(scaled_logits, dim=-1)
+
+        if top_p < 1.0:
+            sorted_probabilities, sorted_indices = torch.sort(probabilities, descending=True)
+            cumulative_probabilities = torch.cumsum(sorted_probabilities, dim=-1)
+            sorted_mask = cumulative_probabilities > top_p
+            sorted_mask[..., 1:] = sorted_mask[..., :-1].clone()
+            sorted_mask[..., 0] = False
+            sorted_probabilities = sorted_probabilities.masked_fill(sorted_mask, 0.0)
+            normalization = sorted_probabilities.sum(dim=-1, keepdim=True).clamp_min(1e-9)
+            sorted_probabilities = sorted_probabilities / normalization
+            sampled_index = torch.multinomial(sorted_probabilities, num_samples=1)
+            next_token = sorted_indices.gather(-1, sampled_index)
+            return int(next_token.item())
+
+        return int(torch.multinomial(probabilities, num_samples=1).item())
+
+    def _build_step_capture(
+        self,
+        *,
+        step_index: int,
+        generated_token: str,
+        generated_token_id: int,
+        prompt_plus_generation_length: int,
+    ) -> TokenStepCapture:
+        if self._active_trace_session is None:
+            raise RuntimeError("The active trace session was unexpectedly missing while building a step.")
+
+        layers: list[LayerActivation] = []
+        high_activation_path: list[str] = []
+        masked_head_names = _format_mask_names(self._active_trace_session.masked_heads_by_layer)
+
+        for layer_index, head_matrix in sorted(self._active_trace_session.current_layer_slices.items()):
+            layer_capture = self._summarize_layer(
+                layer_index,
+                head_matrix,
+                self._active_trace_session.masked_heads_by_layer.get(layer_index, set()),
+            )
+            layers.append(layer_capture)
+
+            if not layer_capture.top_heads:
+                continue
+            top_head = layer_capture.top_heads[0]
+            if top_head.max_attention_score >= self._settings.capture_activation_threshold:
+                high_activation_path.append(f"{layer_capture.layer_name}:{top_head.head_name}")
+
+        return TokenStepCapture(
+            step_index=step_index,
+            generated_token=generated_token,
+            generated_token_id=generated_token_id,
+            prompt_plus_generation_length=prompt_plus_generation_length,
+            masked_heads=masked_head_names,
+            layers=layers,
+            high_activation_path=high_activation_path,
+        )
+
+    def _summarize_layer(
+        self,
+        layer_index: int,
+        head_matrix: Tensor,
+        masked_heads: set[int],
+    ) -> LayerActivation:
+        head_count, sequence_length = head_matrix.shape
+        summaries: list[HeadActivation] = []
+
+        for head_index in range(head_count):
+            head_vector = head_matrix[head_index]
+            top_k_positions = min(self._settings.capture_top_k_positions, sequence_length)
+            top_positions = torch.topk(head_vector, k=top_k_positions).indices.tolist()
+            summaries.append(
+                HeadActivation(
+                    head_index=head_index,
+                    head_name=f"Head_{head_index + 1}",
+                    masked=head_index in masked_heads,
+                    max_attention_score=float(head_vector.max().item()),
+                    mean_attention_score=float(head_vector.mean().item()),
+                    l2_norm=float(torch.linalg.vector_norm(head_vector).item()),
+                    top_source_positions=[int(position) for position in top_positions],
+                    raw_last_token_attention=head_vector.tolist(),
+                )
+            )
+
+        summaries.sort(
+            key=lambda item: (item.max_attention_score, item.l2_norm, item.mean_attention_score),
+            reverse=True,
+        )
+
+        layer_matrix = head_matrix.tolist() if self._settings.capture_full_attention_matrix else None
+
+        return LayerActivation(
+            layer_index=layer_index,
+            layer_name=f"Layer_{layer_index + 1}",
+            sequence_length=sequence_length,
+            head_count=head_count,
+            masked_head_names=[f"Head_{head_index + 1}" for head_index in sorted(masked_heads)],
+            top_heads=summaries[: self._settings.capture_top_k_heads],
+            full_last_token_attention_matrix=layer_matrix,
+        )
+
+    def _render_prompt(self, prompt: str, system_prompt: str | None) -> str:
+        tokenizer = self._require_tokenizer()
+
+        if self._settings.hf_enable_chat_template and getattr(tokenizer, "chat_template", None):
+            messages: list[dict[str, str]] = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": prompt})
+            return tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+
+        if system_prompt:
+            return f"System:\n{system_prompt}\n\nUser:\n{prompt}\n\nAssistant:\n"
+        return f"User:\n{prompt}\n\nAssistant:\n"
+
+    def _require_model(self) -> PreTrainedModel:
+        if self._model is None:
+            raise RuntimeError("The Hugging Face model has not been loaded yet.")
+        return self._model
+
+    def _require_tokenizer(self) -> PreTrainedTokenizerBase:
+        if self._tokenizer is None:
+            raise RuntimeError("The tokenizer has not been loaded yet.")
+        return self._tokenizer
+
+    def _inspect_model_topology(self, model: PreTrainedModel) -> ModelTopology:
+        layers: list[LayerTopology] = []
+        seen_layers: set[int] = set()
+
+        for module_name, module in model.named_modules():
+            if not _is_attention_module(module_name, module):
+                continue
+            layer_index = _extract_layer_index(module_name)
+            if layer_index is None or layer_index in seen_layers:
+                continue
+
+            num_heads = int(getattr(module, "num_heads", 0))
+            head_dim = int(getattr(module, "head_dim", 0))
+            if num_heads <= 0 or head_dim <= 0:
+                continue
+
+            seen_layers.add(layer_index)
+            layers.append(
+                LayerTopology(
+                    layer_index=layer_index,
+                    layer_name=f"Layer_{layer_index + 1}",
+                    head_count=num_heads,
+                    head_dim=head_dim,
+                )
+            )
+
+        layers.sort(key=lambda item: item.layer_index)
+        total_heads = sum(layer.head_count for layer in layers)
+
+        return ModelTopology(
+            model_name=self._settings.hf_model_name,
+            device=self._device,
+            total_layers=len(layers),
+            total_heads=total_heads,
+            layers=layers,
+        )
+
+
+class NeuralInferenceEngine:
+    def __init__(self, settings: InferenceSettings | None = None) -> None:
+        self.settings = settings or InferenceSettings()
+        self._ollama = OllamaClient(self.settings)
+        self._hooked_runner = HookedTransformerRunner(self.settings)
+
+    async def startup(self) -> None:
+        if self.settings.preload_shadow_model:
+            await self._hooked_runner.ensure_loaded()
+
+    async def shutdown(self) -> None:
+        await self._ollama.close()
+        await self._hooked_runner.close()
+
+    async def get_model_topology(self) -> ModelTopology:
+        return await self._hooked_runner.get_model_topology()
+
+    async def is_ollama_available(self) -> bool:
+        return await self._ollama.is_available()
+
+    async def set_masked_heads(self, masked_heads: set[tuple[int, int]]) -> list[HeadMask]:
+        return await self._hooked_runner.replace_masked_heads(masked_heads)
+
+    def get_masked_heads(self) -> list[HeadMask]:
+        return self._hooked_runner.get_masked_heads()
+
+    async def stream(
+        self,
+        request: GenerationRequest,
+        *,
+        step_listener: StepListener | None = None,
+    ) -> AsyncIterator[GenerationChunk]:
+        ollama_available = self.settings.use_ollama_if_available and await self._ollama.is_available()
+
+        if ollama_available:
+            shadow_request = request.model_copy(
+                update={
+                    "max_new_tokens": self.settings.shadow_max_new_tokens or request.max_new_tokens,
+                }
+            )
+            shadow_task = asyncio.create_task(
+                self._hooked_runner.capture_trace(
+                    shadow_request,
+                    analysis_mode=AnalysisMode.SHADOW,
+                    step_listener=step_listener,
+                )
+            )
+
+            try:
+                async for chunk in self._ollama.stream_generate(request):
+                    yield chunk
+
+                try:
+                    trace = await shadow_task
+                except Exception as exc:
+                    LOGGER.exception("Shadow attention capture failed while Ollama generation succeeded.")
+                    trace = AttentionTrace(
+                        source_prompt=request.prompt,
+                        generation_model=self.settings.ollama_model,
+                        analysis_model=self.settings.hf_model_name,
+                        generation_backend=GenerationBackend.OLLAMA,
+                        analysis_mode=AnalysisMode.SHADOW,
+                        prompt_token_count=1,
+                        analysis_error=str(exc),
+                    )
+                else:
+                    trace = trace.model_copy(
+                        update={
+                            "generation_model": self.settings.ollama_model,
+                            "analysis_model": self.settings.hf_model_name,
+                            "generation_backend": GenerationBackend.OLLAMA,
+                            "analysis_mode": AnalysisMode.SHADOW,
+                        }
+                    )
+
+                yield GenerationChunk(
+                    backend=GenerationBackend.OLLAMA,
+                    model=self.settings.ollama_model,
+                    done=True,
+                    trace=trace,
+                )
+                return
+            except Exception:
+                shadow_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await shadow_task
+                raise
+
+        async for chunk in self._hooked_runner.generate_stream(
+            request,
+            analysis_mode=AnalysisMode.INLINE,
+            step_listener=step_listener,
+        ):
+            yield chunk
+
+    async def generate(
+        self,
+        request: GenerationRequest,
+        *,
+        step_listener: StepListener | None = None,
+    ) -> InferenceResponse:
+        output_chunks: list[str] = []
+        final_chunk: GenerationChunk | None = None
+
+        async for chunk in self.stream(request, step_listener=step_listener):
+            if chunk.token:
+                output_chunks.append(chunk.token)
+            if chunk.done:
+                final_chunk = chunk
+
+        if final_chunk is None or final_chunk.trace is None:
+            raise RuntimeError("The inference engine finished without emitting a final trace payload.")
+
+        return InferenceResponse(
+            backend=final_chunk.backend,
+            generation_model=final_chunk.trace.generation_model,
+            analysis_model=final_chunk.trace.analysis_model,
+            text="".join(output_chunks),
+            trace=final_chunk.trace,
+        )
+
+
+def _resolve_device() -> str:
+    if torch.cuda.is_available():
+        return "cuda"
+    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
+def _resolve_dtype(requested_dtype: str | None, device: str) -> torch.dtype:
+    if requested_dtype:
+        normalized = requested_dtype.lower()
+        mapping = {
+            "float32": torch.float32,
+            "float16": torch.float16,
+            "bfloat16": torch.bfloat16,
+        }
+        try:
+            return mapping[normalized]
+        except KeyError as exc:
+            raise ValueError(f"Unsupported SYNAPSE_HF_DTYPE value: {requested_dtype}") from exc
+
+    if device == "cuda":
+        if torch.cuda.is_bf16_supported():
+            return torch.bfloat16
+        return torch.float16
+
+    if device == "mps":
+        return torch.float16
+
+    return torch.float32
+
+
+def _is_attention_module(module_name: str, module: nn.Module) -> bool:
+    lowered_name = module_name.lower()
+    lowered_type = module.__class__.__name__.lower()
+    if not any(token in lowered_name for token in ("self_attn", ".attn", "attention")):
+        return False
+    return hasattr(module, "num_heads") and ("attn" in lowered_type or "attention" in lowered_type)
+
+
+def _extract_layer_index(module_name: str) -> int | None:
+    for pattern in _LAYER_PATTERNS:
+        match = pattern.search(module_name)
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def _extract_attention_tensor(output: Any) -> Tensor | None:
+    if isinstance(output, Tensor) and output.ndim == 4:
+        return output
+
+    if isinstance(output, (tuple, list)):
+        for item in output:
+            if isinstance(item, Tensor) and item.ndim == 4:
+                return item
+
+    for attribute_name in ("attn_weights", "attention_probs", "attention_weights"):
+        attribute = getattr(output, attribute_name, None)
+        if isinstance(attribute, Tensor) and attribute.ndim == 4:
+            return attribute
+
+    return None
+
+
+def _matches_any_stop_sequence(text: str, stop_sequences: list[str]) -> bool:
+    if not text or not stop_sequences:
+        return False
+    return any(stop_sequence and text.endswith(stop_sequence) for stop_sequence in stop_sequences)
+
+
+def _group_mask_heads(masked_heads: set[tuple[int, int]]) -> dict[int, set[int]]:
+    grouped: dict[int, set[int]] = {}
+    for layer_index, head_index in masked_heads:
+        grouped.setdefault(layer_index, set()).add(head_index)
+    return grouped
+
+
+def _format_mask_names(masked_heads_by_layer: dict[int, set[int]]) -> list[str]:
+    formatted: list[str] = []
+    for layer_index, head_indices in sorted(masked_heads_by_layer.items()):
+        for head_index in sorted(head_indices):
+            formatted.append(f"Layer_{layer_index + 1}:Head_{head_index + 1}")
+    return formatted

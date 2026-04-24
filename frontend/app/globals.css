@@ -1,0 +1,207 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #09090b;
+  --panel: #101113;
+  --panel-2: #14161a;
+  --ink: #fafafa;
+  --muted: #7f848f;
+  --line: #26282d;
+  --accent: #39ff14;
+  --accent-soft: rgba(57, 255, 20, 0.14);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background:
+    radial-gradient(circle at top, rgba(57, 255, 20, 0.1), transparent 28%),
+    radial-gradient(circle at 80% 0%, rgba(57, 255, 20, 0.06), transparent 24%),
+    linear-gradient(180deg, #0a0b0d 0%, #09090b 100%);
+}
+
+::selection {
+  background: rgba(57, 255, 20, 0.28);
+  color: #ffffff;
+}
+
+.panel-shell {
+  border: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(19, 20, 24, 0.92), rgba(13, 14, 18, 0.92));
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.01), 0 18px 60px rgba(0, 0, 0, 0.45);
+}
+
+.panel-label {
+  color: var(--muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.metric-mono {
+  font-family: var(--font-mono), monospace;
+  letter-spacing: -0.02em;
+}
+
+.accent-glow {
+  box-shadow: 0 0 0 1px rgba(57, 255, 20, 0.2), 0 0 24px rgba(57, 255, 20, 0.14);
+}
+
+.thin-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #2d2f33 #09090b;
+}
+
+.thin-scrollbar::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.thin-scrollbar::-webkit-scrollbar-track {
+  background: #09090b;
+}
+
+.thin-scrollbar::-webkit-scrollbar-thumb {
+  background: #2d2f33;
+}
+
+.react-flow__controls {
+  border-radius: 2px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: rgba(16, 17, 19, 0.96);
+}
+
+.react-flow__controls-button {
+  background: transparent;
+  border-bottom: 1px solid var(--line);
+  color: #f5f5f5;
+}
+
+.react-flow__controls-button:last-child {
+  border-bottom: 0;
+}
+
+.react-flow__attribution {
+  display: none;
+}
+
+.synapse-flow {
+  --xy-edge-label-background-color: rgba(16, 17, 19, 0.96);
+  --xy-edge-label-color: #d9ffd1;
+}
+
+.synapse-flow .react-flow__edge-textwrapper {
+  filter: drop-shadow(0 0 10px rgba(0, 0, 0, 0.45));
+}
+
+.synapse-flow .react-flow__edge-textbg {
+  fill: rgba(16, 17, 19, 0.96);
+  stroke: rgba(57, 255, 20, 0.32);
+  stroke-width: 1px;
+}
+
+.synapse-flow .react-flow__edge-text {
+  fill: #d9ffd1;
+}
+
+/* React Flow label / edge overrides: remove white background and improve contrast */
+.react-flow__edge-text,
+.react-flow__edge-text *,
+.react-flow__edge-text foreignObject,
+.react-flow__edge-text foreignObject * {
+  background: transparent !important;
+  color: var(--accent) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 11px !important;
+  padding: 0 !important;
+}
+
+/* Ensure custom node containers use the panel backgrounds (some React Flow
+   wrappers add default white backgrounds in certain renderers). */
+.react-flow__node,
+.react-flow__node > div,
+.react-flow__node foreignObject,
+.react-flow__node foreignObject * {
+  background: transparent !important;
+}
+
+/* Keep the visible node content darker and consistent */
+.synapse-node-panel,
+.synapse-node-panel * {
+  background: var(--panel) !important;
+}
+
+/* Handles and connector visuals */
+.react-flow__handle {
+  background: transparent !important;
+}
+
+/* Connection indicators and handle wrappers sometimes render as white
+   rectangles (foreignObject or div) depending on renderer and browser.
+   Explicitly target the common classes and pseudo-elements to avoid
+   white artifacts over the graph. */
+.react-flow__handle,
+.react-flow__handle-top,
+.react-flow__handle-bottom,
+.react-flow__handle-left,
+.react-flow__handle-right,
+.react-flow__handle.connectionindicator,
+.react-flow__handle.connectionindicator *,
+.react-flow__handle.connectionindicator::after,
+.react-flow__handle::after,
+.react-flow__handle::before {
+  background: transparent !important;
+  box-shadow: none !important;
+  border: none !important;
+}
+
+/* Some versions use connection indicator wrappers */
+.react-flow__connection-indicator,
+.react-flow__connection-indicator * {
+  background: transparent !important;
+  box-shadow: none !important;
+  border: none !important;
+}
+
+/* If a white fill SVG shows up, make sure strokes/fills inherit our accent */
+.react-flow__handle svg,
+.react-flow__connection-indicator svg {
+  fill: var(--accent) !important;
+  stroke: var(--accent) !important;
+}
+
+/* Additional defensive targets: some React Flow builds and browser renderers
+   create connection indicator or edge-label wrappers with slightly
+   different class names. Ensure any 'connectionindicator' or edge label
+   foreignObject children don't default to white boxes. */
+.connectionindicator,
+.connectionindicator *,
+.connection-indicator,
+.connection-indicator *,
+.react-flow__connection-indicator,
+.react-flow__connection-indicator * {
+  background: transparent !important;
+  box-shadow: none !important;
+  border: none !important;
+}
+
+/* Edge label wrapper fallbacks */
+.react-flow__edge-text foreignObject > div,
+.react-flow__edge-label foreignObject > div,
+.edgeLabel foreignObject > div,
+foreignObject > div.edgeLabel,
+foreignObject > div.edgeLabel * {
+  /* prefer the inline labelStyle we set in code; fallback to transparent */
+  background: transparent !important;
+  color: var(--accent) !important;
+  padding: 0 !important;
+}
