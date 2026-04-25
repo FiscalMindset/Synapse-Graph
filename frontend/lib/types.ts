@@ -130,6 +130,7 @@ export interface GeneratePayload {
   stop: string[];
   stream: boolean;
   execution_mode: TraceExecutionMode;
+  trace_model_name?: string | null;
 }
 
 export interface StreamSessionEvent {

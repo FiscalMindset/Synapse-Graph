@@ -35,6 +35,37 @@ export async function syncOpenMetadataDefects(): Promise<StateResponse> {
   return (await response.json()) as StateResponse;
 }
 
+export async function setLocalHeadMask(layerIndex: number, headIndex: number): Promise<StateResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/governance/local-mask`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      layer_index: layerIndex,
+      head_index: headIndex,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Local mask request failed: ${response.status}`);
+  }
+
+  return (await response.json()) as StateResponse;
+}
+
+export async function clearLocalHeadMasks(): Promise<StateResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/governance/clear-local-masks`, {
+    method: "POST",
+  });
+
+  if (!response.ok) {
+    throw new Error(`Clear local masks failed: ${response.status}`);
+  }
+
+  return (await response.json()) as StateResponse;
+}
+
 export async function preloadHF(): Promise<StateResponse> {
   const response = await fetch(`${API_BASE_URL}/api/v1/hf/preload`, {
     method: "POST",

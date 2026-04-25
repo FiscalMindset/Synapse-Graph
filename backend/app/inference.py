@@ -73,6 +73,10 @@ class GenerationRequest(BaseModel):
     stop: list[str] = Field(default_factory=list)
     stream: bool = True
     execution_mode: TraceExecutionMode = TraceExecutionMode.AUTO
+    trace_model_name: str | None = Field(
+        default=None,
+        description="Optional Hugging Face model id to use for hook-based tracing.",
+    )
 
 
 class HeadMask(BaseModel):
@@ -379,6 +383,21 @@ class HookedTransformerRunner:
 
     def is_ready(self) -> bool:
         return self._tokenizer is not None and self._model is not None
+
+    async def use_model(self, model_name: str) -> None:
+        normalized_name = model_name.strip()
+        if not normalized_name or normalized_name == self._settings.hf_model_name:
+            return
+
+        async with self._generation_lock:
+            async with self._load_lock:
+                for handle in self._hook_handles:
+                    handle.remove()
+                self._hook_handles.clear()
+                self._tokenizer = None
+                self._model = None
+                self._model_topology = None
+                self._settings.hf_model_name = normalized_name
 
     async def capture_trace(
         self,
@@ -1019,6 +1038,9 @@ class NeuralInferenceEngine:
     async def get_model_topology(self) -> ModelTopology:
         return await self._hooked_runner.get_model_topology()
 
+    async def set_analysis_model(self, model_name: str) -> None:
+        await self._hooked_runner.use_model(model_name)
+
     async def is_ollama_available(self) -> bool:
         return await self._ollama.is_available()
 
@@ -1034,6 +1056,9 @@ class NeuralInferenceEngine:
         *,
         step_listener: StepListener | None = None,
     ) -> AsyncIterator[GenerationChunk]:
+        if request.trace_model_name:
+            await self.set_analysis_model(request.trace_model_name)
+
         ollama_available = self.settings.use_ollama_if_available and await self._ollama.is_available()
         if request.execution_mode == TraceExecutionMode.FAITHFUL:
             await self._hooked_runner.ensure_loaded()

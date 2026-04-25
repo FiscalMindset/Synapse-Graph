@@ -6,7 +6,14 @@ import { Orbit, Radio, ShieldAlert, Sparkles } from "lucide-react";
 import { ActivationChart } from "@/components/activation-chart";
 import { ConsoleLog } from "@/components/console-log";
 import { SynapseGraph } from "@/components/synapse-graph";
-import { fetchState, streamGeneration, syncOpenMetadataDefects, preloadHF } from "@/lib/api";
+import {
+  clearLocalHeadMasks,
+  fetchState,
+  preloadHF,
+  setLocalHeadMask,
+  streamGeneration,
+  syncOpenMetadataDefects,
+} from "@/lib/api";
 import type {
   AttentionTrace,
   LayerActivation,
@@ -21,6 +28,19 @@ import type {
 
 const DEFAULT_PROMPT =
   "Trace the attention route you would use to explain why masking a single head can change a model's response.";
+
+const TRACE_MODEL_OPTIONS = [
+  {
+    value: "gpt2",
+    label: "GPT-2",
+    detail: "12 layers x 12 heads = 144 total heads",
+  },
+  {
+    value: "sshleifer/tiny-gpt2",
+    label: "Tiny GPT-2",
+    detail: "2 layers x 2 heads = 4 total heads",
+  },
+];
 
 const EXECUTION_MODE_OPTIONS: Array<{
   value: TraceExecutionMode;
@@ -52,6 +72,7 @@ export function SynapseDashboard() {
   const [maxNewTokens, setMaxNewTokens] = useState(32);
   const [temperature, setTemperature] = useState(0);
   const [topP, setTopP] = useState(0.95);
+  const [traceModelName, setTraceModelName] = useState("gpt2");
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -136,6 +157,7 @@ export function SynapseDashboard() {
           stop: [],
           stream: true,
           execution_mode: runMode,
+          trace_model_name: traceModelName,
         },
         {
           onSession: (event) => {
@@ -216,6 +238,7 @@ export function SynapseDashboard() {
     setMaxNewTokens(32);
     setTemperature(0);
     setTopP(0.95);
+    setTraceModelName("gpt2");
   }
 
   function applyReadableAnswerPreset() {
@@ -319,7 +342,26 @@ export function SynapseDashboard() {
                 </div>
 
                 <div className="border border-line bg-panel2/60 p-3">
-                  <div className="grid gap-3 sm:grid-cols-3">
+                  <label className="block">
+                    <span className="panel-label">Trace Model</span>
+                    <select
+                      value={traceModelName}
+                      onChange={(event) => setTraceModelName(event.target.value)}
+                      className="mt-2 w-full rounded-sm border border-line bg-panel px-3 py-2 text-sm text-zinc-100 outline-none focus:border-accent"
+                    >
+                      {TRACE_MODEL_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label} - {option.detail}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-2 text-xs leading-5 text-muted">
+                      This controls the real Hugging Face model used for layer/head tracing. More
+                      heads means a larger graph and slower exact runs.
+                    </p>
+                  </label>
+
+                  <div className="mt-3 grid gap-3 sm:grid-cols-3">
                     <label className="block">
                       <span className="panel-label">Tokens</span>
                       <input
@@ -376,6 +418,10 @@ export function SynapseDashboard() {
                     onChange={(event) => setSystemPrompt(event.target.value)}
                     className="mt-2 h-28 w-full resize-none rounded-sm border border-line bg-panel2 px-3 py-3 text-sm text-zinc-100 outline-none transition focus:border-accent"
                   />
+                  <p className="mt-2 text-xs leading-5 text-muted">
+                    Sets the model role/instructions. Instruction-tuned models follow this better than
+                    base GPT-2 models.
+                  </p>
                 </label>
 
                 <label className="block">
@@ -385,6 +431,10 @@ export function SynapseDashboard() {
                     onChange={(event) => setPrompt(event.target.value)}
                     className="mt-2 h-40 w-full resize-none rounded-sm border border-line bg-panel2 px-3 py-3 text-sm text-zinc-100 outline-none transition focus:border-accent"
                   />
+                  <p className="mt-2 text-xs leading-5 text-muted">
+                    This is the actual input being traced. In Faithful mode, the graph highlights
+                    which layers and heads attended while continuing this text.
+                  </p>
                 </label>
 
                 <div>
@@ -460,6 +510,8 @@ export function SynapseDashboard() {
               maskedHeads={maskedHeads}
               state={state}
               selectedLayer={selectedLayer}
+              onStateChange={setState}
+              appendLog={appendLog}
             />
           </section>
         </div>
@@ -660,12 +712,53 @@ function GovernancePanel({
   maskedHeads,
   state,
   selectedLayer,
+  onStateChange,
+  appendLog,
 }: {
   topology: ModelTopology | null;
   maskedHeads: StateResponse["masked_heads"];
   state: StateResponse | null;
   selectedLayer: LayerActivation | null;
+  onStateChange: (state: StateResponse) => void;
+  appendLog: (channel: string, message: string, detail?: string) => void;
 }) {
+  const topHead = selectedLayer?.top_heads.find((head) => !head.masked) ?? selectedLayer?.top_heads[0] ?? null;
+
+  async function handleMaskSelectedHead() {
+    if (!selectedLayer || !topHead) {
+      return;
+    }
+    try {
+      const nextState = await setLocalHeadMask(selectedLayer.layer_index, topHead.head_index);
+      onStateChange(nextState);
+      appendLog(
+        "MASK",
+        `Locally quarantined ${selectedLayer.layer_name}:${topHead.head_name}.`,
+        "Run another faithful probe to see this head masked in the trace.",
+      );
+    } catch (maskError) {
+      appendLog(
+        "ERROR",
+        "Local quarantine failed.",
+        maskError instanceof Error ? maskError.message : String(maskError),
+      );
+    }
+  }
+
+  async function handleClearMasks() {
+    try {
+      const nextState = await clearLocalHeadMasks();
+      onStateChange(nextState);
+      appendLog("MASK", "Cleared all local quarantined heads.");
+    } catch (maskError) {
+      appendLog(
+        "ERROR",
+        "Failed to clear local masks.",
+        maskError instanceof Error ? maskError.message : String(maskError),
+      );
+    }
+  }
+
   return (
     <div className="panel-shell rounded-sm p-4">
       <div className="flex items-center justify-between gap-3">
@@ -699,11 +792,36 @@ function GovernancePanel({
               ? `Masked in layer: ${selectedLayer.masked_head_names.join(", ")}`
               : "No masked heads reported in the current layer."}
           </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={handleMaskSelectedHead}
+              disabled={!selectedLayer || !topHead}
+              className="rounded-sm border border-accent/30 bg-accent/8 px-3 py-2 text-xs text-accent transition hover:border-accent disabled:cursor-not-allowed disabled:border-line disabled:bg-panel disabled:text-muted"
+            >
+              Quarantine Top Head
+            </button>
+            <button
+              type="button"
+              onClick={handleClearMasks}
+              disabled={maskedHeads.length === 0}
+              className="rounded-sm border border-line bg-panel px-3 py-2 text-xs text-zinc-200 transition hover:border-accent disabled:cursor-not-allowed disabled:text-muted"
+            >
+              Clear Local Masks
+            </button>
+          </div>
+          <p className="mt-3 text-xs leading-5 text-muted">
+            This panel shows heads tagged as `DEFECTIVE` in OpenMetadata or local demo masks.
+            Masking appears in the next faithful trace.
+          </p>
         </div>
 
         <div className="thin-scrollbar max-h-60 space-y-2 overflow-y-auto border border-line bg-panel2/60 p-3 font-mono text-xs text-zinc-300">
           {maskedHeads.length === 0 ? (
-            <p className="text-muted">No heads are currently quarantined.</p>
+            <p className="leading-5 text-muted">
+              No heads are currently quarantined. Tag a head/layer as `DEFECTIVE` in
+              OpenMetadata, sync defects, or use Quarantine Top Head for a local demo mask.
+            </p>
           ) : null}
           {maskedHeads.map((mask) => (
             <div key={`${mask.layer_index}-${mask.head_index}`} className="border border-line p-2">

@@ -164,6 +164,22 @@ OpenMetadata is used as the operational memory of the system:
 
 This makes model internals searchable, taggable, and auditable by the same kind of metadata platform data teams already use.
 
+### What Gets Saved In OpenMetadata
+
+When the OpenMetadata integration is connected, the backend writes catalog and lineage objects, not raw model weights:
+
+- Database service: `Synapse_Neural_Service`.
+- Database: one synthetic database per traced model, for example `gpt2`.
+- Schema: `Transformer_Graph`.
+- Prompt table: `Prompt_Ingress`, with prompt text/token-count columns.
+- Response table: `Response_Egress`, with response text column.
+- Layer tables: one table per transformer layer, for example `Layer_1`, `Layer_2`, ... `Layer_12` for GPT-2.
+- Head columns: one column per attention head, for example `Head_1` ... `Head_12` inside each GPT-2 layer table.
+- Classification/tag: `SynapseQuarantine.DEFECTIVE`.
+- Lineage edges: prompt -> active layer/head columns -> response, using the current token step's high-activation path.
+
+OpenMetadata does not store every tensor by default. The app stores compact lineage and metadata anchors there. Full attention matrices would be too large for normal catalog storage and should live in an artifact store if enabled.
+
 ## What OpenMetadata Is Actually Doing Here
 
 OpenMetadata is not running the model and it is not extracting neural activations. The backend does that. OpenMetadata is the catalog and governance layer:
@@ -241,6 +257,13 @@ SYNAPSE_PRELOAD_SHADOW_MODEL=true
 
 This gives you a real exact tracing path for the Hugging Face model. In faithful mode, generation happens inside the hooked Hugging Face model and the graph is built from actual captured attention tensors. It is not fake, but it is exact for `gpt2`, not for Ollama `phi3:latest`. GPT-2 has 12 transformer layers and 144 total attention heads, which is likely the larger number you saw earlier.
 
+The frontend now lets the user switch trace models:
+
+| Trace model | Layers | Heads per layer | Total heads | What to expect |
+| --- | ---: | ---: | ---: | --- |
+| `gpt2` | 12 | 12 | 144 | Bigger real graph, slower exact tracing, strange base-model prose |
+| `sshleifer/tiny-gpt2` | 2 | 2 | 4 | Very fast real graph, tiny topology, poor prose |
+
 To get real exact tracing, set `SYNAPSE_HF_MODEL_NAME` to a Hugging Face causal language model that can load locally with `output_attentions=True`. For example:
 
 ```bash
@@ -299,6 +322,28 @@ The probe console now separates the two goals:
 - Readable Answer: longer Ollama generation for better prose, with proxy or shadow evidence.
 
 Use Exact Trace when you care about real internals. Use Readable Answer when you care about natural language quality.
+
+### Probe Console Controls
+
+- Trace Model: chooses the real Hugging Face model whose layers and heads will be traced.
+- Tokens: limits how many new tokens are generated. Use low values such as 16-64 for exact tracing.
+- Temp: controls randomness. Use `0` for repeatable tracing.
+- Top P: controls sampling nucleus. Leave near `0.95` unless testing generation behavior.
+- System Prompt: sets role/instruction text. Base GPT-2 models may not obey it well.
+- User Prompt: the actual input whose token route is traced.
+- Exact Trace preset: short, deterministic Hugging Face run for real evidence.
+- Readable Answer preset: longer Ollama run for better prose, but proxy evidence unless a matching shadow trace exists.
+
+### Governance / Quarantine Panel
+
+This panel is empty until something is actually quarantined. There are two ways a head can appear there:
+
+1. OpenMetadata governance: tag a layer table or head column with `SynapseQuarantine.DEFECTIVE`, then click Sync Defects.
+2. Local demo mask: select a layer with active heads and click Quarantine Top Head.
+
+The mask is applied to future traced runs, not retroactively to the trace already displayed. After quarantining a head, run another Faithful probe. The selected head should appear as masked in the layer trace and activation chart.
+
+If the panel says "No heads are currently quarantined", that is not an error. It means OpenMetadata has no `DEFECTIVE` tag for this model/head and no local demo mask has been set.
 
 ## Example Flow
 

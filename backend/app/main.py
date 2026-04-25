@@ -85,6 +85,13 @@ class GenerateResponse(BaseModel):
     openmetadata: OpenMetadataStatus
 
 
+class LocalHeadMaskRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    layer_index: int = Field(ge=0)
+    head_index: int = Field(ge=0)
+
+
 class NeuralProxyRuntime:
     def __init__(self) -> None:
         self.service_settings = ServiceSettings()
@@ -245,7 +252,31 @@ class NeuralProxyRuntime:
             self._openmetadata_connected = False
             return self.inference.get_masked_heads()
 
+    async def set_local_head_mask(self, request: LocalHeadMaskRequest) -> list[HeadMask]:
+        current = {
+            (mask.layer_index, mask.head_index)
+            for mask in self.inference.get_masked_heads()
+        }
+        current.add((request.layer_index, request.head_index))
+        return await self.inference.set_masked_heads(current)
+
+    async def clear_local_head_masks(self) -> list[HeadMask]:
+        return await self.inference.set_masked_heads(set())
+
+    async def _select_trace_model(self, request: GenerationRequest) -> None:
+        if not request.trace_model_name:
+            return
+        if request.trace_model_name == self.inference.settings.hf_model_name:
+            return
+
+        async with self._topology_lock:
+            await self.inference.set_analysis_model(request.trace_model_name)
+            self._topology = None
+            self._catalog_binding = None
+            self._last_ingest_error = None
+
     async def generate(self, request: GenerationRequest) -> GenerateResponse:
+        await self._select_trace_model(request)
         topology, catalog = await self.ensure_topology()
         masked_heads = await self.sync_defective_heads(catalog)
         session_id = str(uuid4())
@@ -275,6 +306,7 @@ class NeuralProxyRuntime:
         )
 
     async def stream_response(self, request: GenerationRequest) -> StreamingResponse:
+        await self._select_trace_model(request)
         topology, catalog = await self.ensure_topology()
         masked_heads = await self.sync_defective_heads(catalog)
         session_id = str(uuid4())
@@ -462,6 +494,32 @@ async def sync_defects() -> StateResponse:
     topology, catalog = await runtime.ensure_topology()
     if catalog is not None:
         await runtime.sync_defective_heads(catalog)
+    return StateResponse(
+        topology=topology,
+        latest_session=runtime._latest_session,
+        masked_heads=runtime.inference.get_masked_heads(),
+        ollama_available=await runtime.inference.is_ollama_available(),
+        openmetadata=runtime._openmetadata_status(catalog_ready=catalog is not None),
+    )
+
+
+@app.post("/api/v1/governance/local-mask", response_model=StateResponse)
+async def set_local_head_mask(request: LocalHeadMaskRequest) -> StateResponse:
+    topology, catalog = await runtime.ensure_topology()
+    await runtime.set_local_head_mask(request)
+    return StateResponse(
+        topology=topology,
+        latest_session=runtime._latest_session,
+        masked_heads=runtime.inference.get_masked_heads(),
+        ollama_available=await runtime.inference.is_ollama_available(),
+        openmetadata=runtime._openmetadata_status(catalog_ready=catalog is not None),
+    )
+
+
+@app.post("/api/v1/governance/clear-local-masks", response_model=StateResponse)
+async def clear_local_head_masks() -> StateResponse:
+    topology, catalog = await runtime.ensure_topology()
+    await runtime.clear_local_head_masks()
     return StateResponse(
         topology=topology,
         latest_session=runtime._latest_session,
