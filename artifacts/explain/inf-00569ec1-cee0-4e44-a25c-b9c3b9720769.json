@@ -1,0 +1,33 @@
+{
+  "inference_id": "inf-00569ec1-cee0-4e44-a25c-b9c3b9720769",
+  "explanation": {
+    "method": "token-attribution",
+    "summary": "Top tokens: Einstein, refrigerator, Szilard",
+    "attributions": [
+      {
+        "token": "what",
+        "score": 0.1
+      },
+      {
+        "token": "invention",
+        "score": 1.0
+      },
+      {
+        "token": "done",
+        "score": 0.1
+      },
+      {
+        "token": "by",
+        "score": 0.1
+      },
+      {
+        "token": "albert",
+        "score": 0.1
+      },
+      {
+        "token": "einstein",
+        "score": 1.0
+      }
+    ]
+  }
+}

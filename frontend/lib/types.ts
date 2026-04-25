@@ -61,6 +61,8 @@ export interface AttentionTrace {
   generation_backend: GenerationBackend;
   analysis_mode: AnalysisMode;
   trace_fidelity: TraceFidelity;
+  match_score?: number | null;
+  fidelity_reason?: string | null;
   prompt_token_count: number;
   generated_text: string;
   analysis_error?: string | null;

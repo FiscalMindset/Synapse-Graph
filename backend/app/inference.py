@@ -5,8 +5,10 @@ import inspect
 import json
 import logging
 import re
+import os
 from collections import Counter
 from collections.abc import AsyncIterator, Awaitable, Callable
+import difflib
 from contextlib import suppress
 from enum import StrEnum
 from threading import Lock
@@ -154,6 +156,8 @@ class AttentionTrace(BaseModel):
     prompt_token_count: int = Field(ge=1)
     generated_text: str = ""
     analysis_error: str | None = None
+    match_score: float | None = None
+    fidelity_reason: str | None = None
     summary: TraceSummary | None = None
     steps: list[TokenStepCapture] = Field(default_factory=list)
 
@@ -196,6 +200,7 @@ class InferenceSettings(BaseSettings):
 
     hf_model_name: str = "Qwen/Qwen2.5-1.5B-Instruct"
     hf_revision: str | None = None
+    hf_token: str | None = None
     hf_local_files_only: bool = False
     hf_device: str | None = None
     hf_dtype: str | None = None
@@ -366,6 +371,9 @@ class HookedTransformerRunner:
         *,
         analysis_mode: AnalysisMode,
         step_listener: StepListener | None = None,
+        # Fractional match score between the live generation and the shadow HF run (0.0-1.0)
+        match_score: float | None = None
+        # Human readable reason describing why the trace was marked proxy/exact
     ) -> AttentionTrace:
         trace: AttentionTrace | None = None
         async for chunk in self.generate_stream(
@@ -502,18 +510,53 @@ class HookedTransformerRunner:
         if self._settings.hf_revision:
             tokenizer_load_kwargs["revision"] = self._settings.hf_revision
 
-        # Normalize HF model name: strip any colon-qualified tags (e.g. 'name:tag')
-        # which are invalid as Hugging Face repo ids. If a colon appears, use the
-        # prefix as the repo id and log a warning for the user.
+        # Normalize HF model name. If the configured value looks like an Ollama
+        # identifier (e.g. 'phi3:latest'), skip attempting to contact the Hugging
+        # Face Hub and treat the HF model as unavailable to avoid spurious 401s
+        # when the user meant to use Ollama. Otherwise strip simple colon tags
+        # (e.g. 'model:tag') for hub operations.
         hf_name_raw = self._settings.hf_model_name or ""
         hf_name_to_load = hf_name_raw
         if ":" in hf_name_raw:
+            # Heuristic: if there's no '/' and the suffix looks like a simple tag
+            # (common for Ollama identifiers like 'name:latest'), assume this is
+            # NOT a Hugging Face repo id and skip HF loading.
+            prefix, suffix = hf_name_raw.split(":", 1)
+            if "/" not in hf_name_raw and re.match(r"^[\w.\-]+$", suffix):
+                LOGGER.warning(
+                    "Configured HF model '%s' looks like a non-HF identifier (e.g. Ollama). Skipping Hugging Face load. "
+                    "Set 'ollama_model' to use Ollama or set a valid HF repo id.",
+                    hf_name_raw,
+                )
+                self._tokenizer = None
+                self._model = None
+                self._model_topology = ModelTopology(
+                    model_name=hf_name_raw,
+                    device="unavailable",
+                    total_layers=0,
+                    total_heads=0,
+                    layers=[],
+                )
+                return
+            # Otherwise treat the part before ':' as the repo id and warn.
             hf_name_to_load = hf_name_raw.split(":", 1)[0]
             LOGGER.warning(
                 "HuggingFace model name '%s' contains ':'; using '%s' for hub operations.",
                 hf_name_raw,
                 hf_name_to_load,
             )
+
+        # Allow an explicit HF token via settings or common env vars so private
+        # repositories can be accessed when present.
+        hf_token = (
+            self._settings.hf_token
+            or os.environ.get("HF_HUB_TOKEN")
+            or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+            or os.environ.get("HUGGINGFACE_TOKEN")
+            or os.environ.get("HF_TOKEN")
+        )
+        if hf_token:
+            tokenizer_load_kwargs["use_auth_token"] = hf_token
 
         try:
             tokenizer = AutoTokenizer.from_pretrained(
@@ -529,6 +572,8 @@ class HookedTransformerRunner:
                 "local_files_only": self._settings.hf_local_files_only,
                 "low_cpu_mem_usage": True,
             }
+            if hf_token:
+                model_load_kwargs["use_auth_token"] = hf_token
             if self._settings.hf_revision:
                 model_load_kwargs["revision"] = self._settings.hf_revision
 
@@ -553,6 +598,13 @@ class HookedTransformerRunner:
             self._model_topology = self._inspect_model_topology(model)
         except Exception as exc:
             LOGGER.exception("Failed to load HuggingFace model '%s': %s", self._settings.hf_model_name, exc)
+            # Provide clearer guidance for common failures (auth / private repo / wrong identifier)
+            exc_text = str(exc)
+            if any(tok in exc_text for tok in ("401", "Unauthorized", "Repository Not Found", "is not a local folder")):
+                LOGGER.error(
+                    "HuggingFace access error. If the model is private, set the token via the SYNAPSE_HF_TOKEN env var or HF_HUB_TOKEN, or run 'huggingface-cli login'.\n"
+                    "If you intended to use an Ollama identifier (e.g. 'phi3:latest'), set that as the Ollama model via the 'ollama_model' setting instead of 'hf_model_name'."
+                )
             # Try a safe fallback to a small public model so the visualizer has a topology.
             fallback_candidate = "gpt2"
             if not self._settings.hf_local_files_only and self._settings.hf_model_name != fallback_candidate:
@@ -975,22 +1027,37 @@ class NeuralInferenceEngine:
                     "max_new_tokens": self.settings.shadow_max_new_tokens or request.max_new_tokens,
                 }
             )
-            shadow_task = asyncio.create_task(
-                self._hooked_runner.capture_trace(
-                    shadow_request,
-                    analysis_mode=AnalysisMode.SHADOW,
-                    step_listener=step_listener,
+            # Only start a shadow HF capture task if the tracer appears to be
+            # loaded (tokenizer and model present). If the tracer is not
+            # available (for example the configured HF name looks like an
+            # Ollama identifier or was not preloaded), skip shadow capture and
+            # return a proxy trace at the end.
+            shadow_task = None
+            if getattr(self._hooked_runner, "_tokenizer", None) is not None and getattr(
+                self._hooked_runner, "_model", None
+            ) is not None:
+                shadow_task = asyncio.create_task(
+                    self._hooked_runner.capture_trace(
+                        shadow_request,
+                        analysis_mode=AnalysisMode.SHADOW,
+                        step_listener=step_listener,
+                    )
                 )
-            )
+            else:
+                LOGGER.warning(
+                    "Shadow tracer appears to be unavailable; skipping HF capture for this run."
+                )
 
             try:
+                ollama_output_parts: list[str] = []
                 async for chunk in self._ollama.stream_generate(request):
+                    if chunk.token:
+                        ollama_output_parts.append(chunk.token)
                     yield chunk
 
-                try:
-                    trace = await shadow_task
-                except Exception as exc:
-                    LOGGER.exception("Shadow attention capture failed while Ollama generation succeeded.")
+                if shadow_task is None:
+                    # No shadow trace available — synthesize a proxy trace so
+                    # the UI and lineage pipeline still receive a payload.
                     trace = AttentionTrace(
                         source_prompt=request.prompt,
                         generation_model=self.settings.ollama_model,
@@ -999,15 +1066,69 @@ class NeuralInferenceEngine:
                         analysis_mode=AnalysisMode.SHADOW,
                         trace_fidelity=TraceFidelity.PROXY,
                         prompt_token_count=1,
-                        analysis_error=str(exc),
+                        analysis_error="Shadow tracer unavailable or not preloaded.",
                     )
                 else:
+                    try:
+                        trace = await shadow_task
+                    except Exception as exc:
+                        LOGGER.exception("Shadow attention capture failed while Ollama generation succeeded.")
+                        # Build a minimal trace payload first, then attach optional
+                        # metadata so that any model/schema differences do not raise
+                        # earlier pydantic validation errors.
+                        trace = AttentionTrace(
+                            source_prompt=request.prompt,
+                            generation_model=self.settings.ollama_model,
+                            analysis_model=self.settings.hf_model_name,
+                            generation_backend=GenerationBackend.OLLAMA,
+                            analysis_mode=AnalysisMode.SHADOW,
+                            trace_fidelity=TraceFidelity.PROXY,
+                            prompt_token_count=1,
+                            analysis_error=str(exc),
+                        )
+                        try:
+                            trace = trace.model_copy(
+                                update={
+                                    "match_score": None,
+                                    "fidelity_reason": f"Shadow capture failed: {exc}",
+                                }
+                            )
+                        except Exception:
+                            # If model_copy fails due to schema mismatch, silently
+                            # continue with the minimal trace so we still return
+                            # a usable payload rather than raising further.
+                            LOGGER.debug(
+                                "Could not attach match metadata to trace; continuing with minimal trace."
+                            )
+                # Compute a similarity score between the Ollama output and the
+                    # shadow HF trace. If they match (within a high threshold) we
+                    # can safely promote the trace to exact evidence; otherwise keep
+                    # it labeled as proxy and include a match score.
+                    try:
+                        ollama_text = "".join(ollama_output_parts)
+                        shadow_text = trace.generated_text or ""
+                        norm_ollama = " ".join(ollama_text.split())
+                        norm_shadow = " ".join(shadow_text.split())
+                        match_score = float(difflib.SequenceMatcher(None, norm_ollama, norm_shadow).ratio())
+                    except Exception:
+                        LOGGER.exception("Failed to compute match score between Ollama and shadow HF trace.")
+                        match_score = None
+
+                    final_fidelity = TraceFidelity.PROXY
+                    fidelity_reason: str | None = None
+                    if match_score is not None:
+                        if match_score >= 0.995:
+                            final_fidelity = TraceFidelity.EXACT
+                            fidelity_reason = f"Shadow HF trace matched Ollama output (score={match_score:.3f})."
+                        else:
+                            fidelity_reason = f"Ollama vs HF mismatch (score={match_score:.3f})."
+
                     summary = trace.summary
                     if summary is not None:
                         summary = summary.model_copy(
                             update={
                                 "explanation": _build_trace_summary_explanation(
-                                    TraceFidelity.PROXY,
+                                    final_fidelity,
                                     summary.dominant_heads,
                                     summary.influential_tokens,
                                     summary.masked_heads_applied,
@@ -1020,7 +1141,9 @@ class NeuralInferenceEngine:
                             "analysis_model": self.settings.hf_model_name,
                             "generation_backend": GenerationBackend.OLLAMA,
                             "analysis_mode": AnalysisMode.SHADOW,
-                            "trace_fidelity": TraceFidelity.PROXY,
+                            "trace_fidelity": final_fidelity,
+                            "match_score": match_score,
+                            "fidelity_reason": fidelity_reason,
                             "summary": summary,
                         }
                     )

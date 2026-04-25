@@ -211,6 +211,21 @@ Common variables:
 - `SYNAPSE_HF_MODEL_NAME`
 - `SYNAPSE_PRELOAD_SHADOW_MODEL`
 
+Authentication for private Hugging Face models
+
+- `SYNAPSE_HF_TOKEN`: Optional. If the configured `SYNAPSE_HF_MODEL_NAME` points to a private or gated HF repo, set this to a valid HF Hub token so the backend can download the tokenizer and model weights. The server also honors common env vars `HF_HUB_TOKEN`, `HUGGINGFACE_HUB_TOKEN`, and `HF_TOKEN`.
+- Alternatively, authenticate locally with the Hugging Face CLI:
+
+```bash
+pip install huggingface-hub
+huggingface-cli login
+```
+
+Notes:
+
+- If you intend to use a local Ollama model (for example `phi3:latest`), set `SYNAPSE_OLLAMA_MODEL` and prefer Ollama for generation. Using an Ollama-style identifier in `SYNAPSE_HF_MODEL_NAME` may result in attempted HF lookups; the runtime now heuristically skips HF loading for simple colon-style identifiers and will log guidance.
+- To force the HF tracer to load (useful after setting an auth token), call the `/api/v1/hf/preload` endpoint or set `SYNAPSE_PRELOAD_SHADOW_MODEL=true` before startup.
+
 ### Frontend
 
 Copy:

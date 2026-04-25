@@ -114,7 +114,7 @@ export function SynapseDashboard() {
     }
   }
 
-  async function handleProbe() {
+  async function handleProbe(execMode?: TraceExecutionMode) {
     setIsRunning(true);
     setError(null);
     setResponseText("");
@@ -131,7 +131,7 @@ export function SynapseDashboard() {
           top_p: 0.95,
           stop: [],
           stream: true,
-          execution_mode: executionMode,
+          execution_mode: execMode ?? executionMode,
         },
         {
           onSession: (event) => {
@@ -326,7 +326,7 @@ export function SynapseDashboard() {
                 <div className="flex items-center gap-3">
                   <button
                     type="button"
-                    onClick={handleProbe}
+                    onClick={() => handleProbe()}
                     disabled={isRunning}
                     className="accent-glow border border-accent bg-accent/12 px-4 py-3 text-xs font-medium uppercase tracking-[0.24em] text-accent transition hover:bg-accent/18 disabled:cursor-not-allowed disabled:border-line disabled:bg-panel2 disabled:text-muted"
                   >
@@ -355,7 +355,7 @@ export function SynapseDashboard() {
           <section className="space-y-5">
             <ActivationChart layer={selectedLayer} />
 
-            <ExplainabilityPanel trace={activeTrace} latestStep={latestStep} />
+            <ExplainabilityPanel trace={activeTrace} latestStep={latestStep} onRerunFaithful={() => handleProbe("faithful")} isRunning={isRunning} />
 
             <ResponsePanel responseText={responseText} latestStep={latestStep} error={error} />
 
@@ -441,9 +441,13 @@ function ResponsePanel({
 function ExplainabilityPanel({
   trace,
   latestStep,
+  onRerunFaithful,
+  isRunning,
 }: {
   trace: AttentionTrace | null;
   latestStep: TokenStepCapture | null;
+  onRerunFaithful?: () => void;
+  isRunning?: boolean;
 }) {
   const summary = trace?.summary ?? null;
 
@@ -457,10 +461,25 @@ function ExplainabilityPanel({
         <div className="metric-mono text-right text-xs text-muted">
           <p>{trace ? fidelityLabel(trace.trace_fidelity) : "Awaiting run"}</p>
           <p>{trace?.analysis_mode ?? "No analysis mode yet"}</p>
+          {trace?.match_score != null ? (
+            <p>{`Match ${(trace.match_score * 100).toFixed(1)}%`}</p>
+          ) : null}
         </div>
       </div>
 
       <div className="mt-4 space-y-3">
+        {trace?.trace_fidelity === "proxy" ? (
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={() => onRerunFaithful?.()}
+              disabled={isRunning}
+              className="rounded-sm border border-accent/25 bg-panel2 px-2 py-1 text-[11px] text-accent"
+            >
+              Re-run Faithful
+            </button>
+          </div>
+        ) : null}
         <div className="border border-line bg-panel2/70 p-3">
           <p className="text-sm leading-6 text-zinc-100">
             {summary?.explanation ??

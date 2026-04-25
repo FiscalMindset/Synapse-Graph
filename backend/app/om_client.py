@@ -12,6 +12,7 @@ from urllib.parse import quote
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+import uuid
 
 from metadata.generated.schema.api.classification.createClassification import (
     CreateClassificationRequest,
@@ -396,7 +397,7 @@ class OpenMetadataNeuralMapper:
         return TableBinding(
             table_name=table_name,
             table_fqn=table_fqn,
-            table_id=str(table_entity.id),
+            table_id=_id_to_str(table_entity.id),
             layer_index=layer_index,
             column_fqns=column_fqns,
         )
@@ -762,3 +763,32 @@ def _fqn_value(value: Any) -> str:
 def _column_name(column: Column) -> str:
     raw_name = getattr(column, "name", "")
     return str(getattr(raw_name, "root", raw_name))
+
+
+def _id_to_str(value: Any) -> str:
+    """Normalize various SDK id shapes into a plain UUID string when possible.
+
+    The OpenMetadata SDK can return id objects that wrap a UUID (sometimes
+    exposed as `.root`, sometimes as `UUID('...')` in their repr). Pydantic's
+    EntityReference expects a raw UUID string (or urn:uuid:...). This helper
+    attempts to extract a canonical UUID string; if not possible, it falls back
+    to the best string representation.
+    """
+    if value is None:
+        return ""
+
+    # Unwrap common wrappers
+    candidate = getattr(value, "id", None) or getattr(value, "root", value)
+
+    # If it's already a uuid.UUID, return canonical string
+    if isinstance(candidate, uuid.UUID):
+        return str(candidate)
+
+    s = str(candidate)
+    # Try to extract an embedded UUID substring
+    m = re.search(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", s)
+    if m:
+        return m.group(0)
+
+    # As a last resort return the raw string
+    return s
