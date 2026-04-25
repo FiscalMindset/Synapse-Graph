@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Synapse-Graph — Project Status</title>
+    <style>
+      :root{--bg:#0f172a;--card:#071029;--muted:#9fb8d7;--accent:#8bd3ff}
+      body{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;margin:0;background:var(--bg);color:#e6eef8}
+      .wrap{max-width:1000px;margin:28px auto;padding:20px}
+      .card{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));border-radius:12px;padding:20px;box-shadow:0 10px 40px rgba(2,6,23,0.6)}
+      h1{margin:0 0 6px 0;font-size:22px}
+      .list{margin-top:14px}
+      .done{color:#8be39f}
+      .next{color:#ffd08a}
+      .bar{height:12px;background:#09203a;border-radius:999px;overflow:hidden}
+      .progress{height:12px;background:linear-gradient(90deg,#3ee1ff,#8bd3ff);width:75%}
+      a.link{color:var(--accent)}
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px">
+        <div>
+          <h1>Project status & future goals</h1>
+          <div style="color:var(--muted);font-size:13px">Snapshot of completed work, current state, and planned next steps.</div>
+        </div>
+        <div><a class="link" href="tech_stack.html">Tech stack</a> · <a class="link" href="video_scene.html">Video</a></div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin:0 0 10px 0">Progress overview</h3>
+        <div style="display:flex;align-items:center;gap:12px">
+          <div style="flex:1">
+            <div style="color:var(--muted);font-size:13px;margin-bottom:8px">Completed checkpoints (representative)</div>
+            <ul class="list">
+              <li class="done">✅ Webhook secret validation implemented</li>
+              <li class="done">✅ OpenMetadata tagging helper with retry/backoff</li>
+              <li class="done">✅ Unit + integration tests for quarantine and discovery flow</li>
+              <li class="done">✅ Frontend overlay traces & causal discovery UI</li>
+              <li class="done">✅ CI workflow for pytest & TypeScript checks</li>
+              <li class="done">✅ `form.md`, `video_script.md`, and documentation updates</li>
+            </ul>
+          </div>
+          <div style="width:260px">
+            <div style="font-size:13px;color:var(--muted);margin-bottom:6px">Overall progress</div>
+            <div class="bar" aria-hidden><div class="progress"></div></div>
+            <div style="font-size:12px;color:var(--muted);margin-top:8px">Most items complete; remaining: open PR and optional extras.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:14px">
+        <h3 style="margin:0 0 10px 0">Current state (what's in the repo)</h3>
+        <ul class="list">
+          <li>Backend API with endpoints for discovery, quarantine, OpenMetadata sync.</li>
+          <li>Inference runtime with `HeadMaskStore` and hook-based tracer.</li>
+          <li>Next.js frontend with synapse graph, overlays, and UI controls.</li>
+          <li>Automated tests (unit + integration) and GitHub Actions workflow.</li>
+        </ul>
+      </div>
+
+      <div class="card" style="margin-top:14px">
+        <h3 style="margin:0 0 10px 0">Future goals & growth roadmap</h3>
+        <ol class="list">
+          <li>Open a PR and gather feedback from collaborators (short-term).</li>
+          <li>Add deeper ablation sweeps (pair/triple) and heuristic ranking improvements.</li>
+          <li>Provide an optional OpenMetadata mock for offline testing and CI.</li>
+          <li>Capture audit trails in OpenMetadata (tags + who/when updates were applied).</li>
+          <li>Polish UX, add proposed quarantines with human approval, and add exportable reports.</li>
+        </ol>
+      </div>
+
+      <div style="margin-top:14px;text-align:right;color:var(--muted);font-size:13px">For details, open <a class="link" href="README.md">README.md</a> or the architecture diagram (<a class="link" href="video_diagram.html">diagram</a>).</div>
+    </div>
+  </body>
+</html>

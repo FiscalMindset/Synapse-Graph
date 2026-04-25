@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Synapse-Graph — OpenMetadata Usage</title>
+    <style>
+      :root{--bg:#0f172a;--card:#071029;--muted:#9fb8d7;--accent:#8bd3ff}
+      body{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;margin:0;background:var(--bg);color:#e6eef8}
+      .wrap{max-width:980px;margin:28px auto;padding:20px}
+      .card{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));border-radius:12px;padding:20px;box-shadow:0 10px 40px rgba(2,6,23,0.6)}
+      h1{margin:0 0 6px 0;font-size:22px}
+      .mermaid{margin-top:12px}
+      .note{color:var(--muted);font-size:13px}
+      a.link{color:var(--accent)}
+    </style>
+    <script src="https://unpkg.com/mermaid@10/dist/mermaid.min.js"></script>
+    <script>mermaid.initialize({startOnLoad:true,theme:'dark'});</script>
+  </head>
+  <body>
+    <div class="wrap">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <h1>How Synapse-Graph uses OpenMetadata</h1>
+          <div class="note">Mapping attention-based interpretability artifacts into a metadata control plane.</div>
+        </div>
+        <div><a class="link" href="tech_stack.html">Tech stack</a></div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-top:0">Topology mapping</h3>
+        <div class="mermaid">
+          graph LR
+          M["Model (service)"] --> DB["Database (model)"]
+          DB --> SC["Schema (transformer)"]
+          SC --> L1["Layer_1 (table)"]
+          SC --> L2["Layer_2 (table)"]
+          L1 --> C11["Head_1 (column)"]
+          L1 --> C12["Head_2 (column)"]
+          L2 --> C21["Head_1 (column)"]
+          C11 -. Tags .-> TAG["DEFECTIVE / QUARANTINED"]
+          TAG --> API["Backend reads tags -> set_masked_heads()"]
+        </div>
+
+        <p class="note">Each transformer layer is represented as a table and each head as a column. Lineage edges connect prompt → layer.table → head.column → generated token.</p>
+      </div>
+
+      <div class="card" style="margin-top:14px">
+        <h3 style="margin:0 0 8px 0">Governance flow</h3>
+        <ol>
+          <li>Topology bootstrap: backend creates or discovers synthetic OpenMetadata entities for model, layers, and heads.</li>
+          <li>Trace ingestion: `AttentionTrace` objects are ingested as lineage edges linking prompts to table/column entities.</li>
+          <li>Operator action: user tags a head column with `DEFECTIVE` or `QUARANTINED`.</li>
+          <li>Runtime enforcement: backend polls/receives webhook, then calls `set_masked_heads()` to update `HeadMaskStore`. Masks take effect for subsequent generations (snapshot semantics).</li>
+        </ol>
+
+        <p class="note">Implementation notes: the code prefers column-level tagging via the OpenMetadata REST API and falls back to table-level tags when column ops fail. Tagging includes retry/backoff for robustness.</p>
+      </div>
+
+      <div class="card" style="margin-top:14px">
+        <h3 style="margin:0 0 8px 0">Querying and observability</h3>
+        <p class="note">Because heads are modeled as columns, data teams can query and filter by tags, view lineage for specific generations, and attach audit and ownership metadata to interpretable components.</p>
+        <p class="note">This allows straightforward integration with existing data governance workflows (alerts, dashboards, and access controls) driven by familiar metadata primitives.</p>
+      </div>
+
+      <div style="margin-top:14px;text-align:right;color:var(--muted);font-size:13px">See also: <a class="link" href="README.md">README</a> and <a class="link" href="video_diagram.html">Architecture diagram</a>.</div>
+    </div>
+  </body>
+</html>

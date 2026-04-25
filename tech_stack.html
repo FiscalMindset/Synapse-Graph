@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Synapse-Graph — Tech Stack</title>
+    <style>
+      :root{--bg:#0f172a;--card:#071029;--muted:#9fb8d7;--accent:#8bd3ff;--glass: rgba(255,255,255,0.02)}
+      body{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;margin:0;background:var(--bg);color:#e6eef8}
+      .wrap{max-width:1100px;margin:28px auto;padding:20px}
+      .card{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));border-radius:12px;padding:20px;box-shadow:0 10px 40px rgba(2,6,23,0.6)}
+      h1{margin:0 0 6px 0;font-size:22px}
+      .grid{display:grid;grid-template-columns:1fr 360px;gap:18px;margin-top:16px}
+      .stack-list{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+      .stack-card{background:var(--card);border-radius:10px;padding:12px}
+      .badge{display:inline-block;padding:6px 10px;border-radius:999px;background:rgba(139,211,255,0.08);color:var(--accent);font-weight:600;font-size:12px}
+      pre{background:var(--glass);padding:8px;border-radius:8px;overflow:auto}
+      .nav{display:flex;gap:10px;margin-bottom:14px}
+      a.link{color:var(--accent);text-decoration:none}
+      .right{padding-left:12px}
+      .pill{display:inline-block;padding:6px 10px;border-radius:999px;background:#081426;color:#cfe3ff;font-size:13px}
+    </style>
+    <script src="https://unpkg.com/mermaid@10/dist/mermaid.min.js"></script>
+    <script>mermaid.initialize({startOnLoad:true,theme:'dark'});</script>
+  </head>
+  <body>
+    <div class="wrap">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px">
+        <div>
+          <h1>Synapse-Graph — Tech Stack</h1>
+          <div style="color:var(--muted);font-size:13px">A factual snapshot of the repo manifests and how components map to runtime roles.</div>
+        </div>
+        <div class="nav">
+          <a class="link" href="video_diagram.html">Architecture diagram</a>
+          <a class="link" href="project_status.html">Project status</a>
+          <a class="link" href="openmetadata_usage.html">OpenMetadata usage</a>
+          <a class="link" href="video_scene.html">Video player</a>
+        </div>
+      </div>
+
+      <div class="grid">
+        <div>
+          <div class="card">
+            <div style="display:flex;gap:12px;align-items:center;justify-content:space-between">
+              <div>
+                <div style="display:flex;gap:8px;align-items:center"><span class="badge">Repo facts</span><span style="color:var(--muted);font-size:13px">(sourced from project manifests)</span></div>
+                <h2 style="margin:8px 0 0 0;font-size:16px">Core components</h2>
+              </div>
+              <div class="pill">Python >=3.11 &middot; Next.js</div>
+            </div>
+
+            <div style="margin-top:12px">
+              <div class="stack-list">
+                <div class="stack-card">
+                  <strong>Backend (selected)</strong>
+                  <ul style="margin:8px 0 0 16px;color:var(--muted)">
+                    <li>fastapi</li>
+                    <li>httpx</li>
+                    <li>openmetadata-ingestion</li>
+                    <li>torch, transformers, accelerate</li>
+                    <li>uvicorn</li>
+                  </ul>
+                </div>
+                <div class="stack-card">
+                  <strong>Frontend (selected)</strong>
+                  <ul style="margin:8px 0 0 16px;color:var(--muted)">
+                    <li>next (15.x)</li>
+                    <li>react 19 / react-dom</li>
+                    <li>@xyflow/react (graph viz)</li>
+                    <li>recharts</li>
+                    <li>tailwindcss</li>
+                  </ul>
+                </div>
+                <div class="stack-card">
+                  <strong>Metadata stack</strong>
+                  <ul style="margin:8px 0 0 16px;color:var(--muted)">
+                    <li>OpenMetadata ingestion SDK</li>
+                    <li>REST tagging + ingestion API</li>
+                  </ul>
+                </div>
+                <div class="stack-card">
+                  <strong>Dev / CI</strong>
+                  <ul style="margin:8px 0 0 16px;color:var(--muted)">
+                    <li>pytest (tests)</li>
+                    <li>npx tsc --noEmit (TS typecheck)</li>
+                    <li>GitHub Actions workflow included</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card" style="margin-top:14px">
+            <h3 style="margin:0 0 8px 0">Runtime role mapping</h3>
+            <div class="mermaid">
+              flowchart LR
+              U["User Dashboard\n(Next.js)"] --> API["FastAPI Neural Proxy\n(NeuralProxyRuntime)"]
+              API --> GEN["Generation Engine\n(Ollama preferred / HF fallback)"]
+              API --> TR["Shadow Tracer\n(PyTorch + transformers)"]
+              TR --> OM["OpenMetadata\n(topology & lineage)"]
+              API --> OM
+              API --> MASK["HeadMaskStore\n(runtime masks)"]
+            </div>
+          </div>
+        </div>
+
+        <div class="right">
+          <div class="card">
+            <h3 style="margin:0 0 8px 0">Quick manifest snippets</h3>
+            <div style="color:var(--muted);font-size:13px">Excerpt from <code>backend/pyproject.toml</code> and <code>frontend/package.json</code></div>
+            <pre><code>{
+  "backend": [
+    "fastapi", "httpx", "openmetadata-ingestion", "torch", "transformers", "uvicorn"
+  ],
+  "frontend": [
+    "next@^15", "react@^19", "@xyflow/react", "recharts", "tailwindcss"
+  ]
+}</code></pre>
+            <div style="margin-top:10px;color:var(--muted);font-size:13px">Use this page in the video to point at concrete tech choices — these are exact manifest entries in the repository.</div>
+          </div>
+
+          <div class="card" style="margin-top:12px">
+            <h4 style="margin:0 0 8px 0">Quick links</h4>
+            <div style="display:flex;flex-direction:column;gap:8px">
+              <a class="link" href="video_diagram.html">Architecture diagram</a>
+              <a class="link" href="project_status.html">Project status & goals</a>
+              <a class="link" href="openmetadata_usage.html">OpenMetadata usage</a>
+              <a class="link" href="video_scene.html">Video player / upload</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

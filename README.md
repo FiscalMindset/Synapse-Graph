@@ -90,6 +90,33 @@ flowchart LR
     API --> FE
 ```
 
+    ## Tech stack & architecture (explicit)
+
+    This section lists the actual technologies used in the repository (sourced from `backend/pyproject.toml` and `frontend/package.json`). Do not rely on these as design-time guesses — they are taken directly from project manifest files.
+
+    - Python: `>=3.11,<3.13` (see `backend/pyproject.toml`).
+    - Backend (selected deps from `backend/pyproject.toml`):
+      - `fastapi` (HTTP API)
+      - `httpx` (REST client)
+      - `openmetadata-ingestion` (OpenMetadata ingestion / SDK)
+      - `pydantic-settings` (configuration)
+      - `torch` and `transformers` (hooked shadow tracer)
+      - `uvicorn[standard]` (ASGI server)
+    - Frontend (selected deps from `frontend/package.json`):
+      - `next` (Next.js 15)
+      - `react` / `react-dom` (React 19)
+      - `@xyflow/react` (React Flow / graph visualization)
+      - `recharts` (activation charts)
+      - `tailwindcss` (styling)
+
+    Runtime architecture summary:
+
+    1. The user interacts with the `Next.js` dashboard which calls the FastAPI neural proxy.
+    2. The proxy orchestrates generation (prefers local Ollama where available) and concurrently runs a hook-instrumented Hugging Face tracer (PyTorch + `transformers`) to extract `AttentionTrace` objects.
+    3. Traces are ingested into OpenMetadata (topology, lineage) using `openmetadata-ingestion`; tags applied in OpenMetadata can be read back and converted into head masks by the runtime's `HeadMaskStore`.
+
+    If you need more detail or an exported architecture diagram (SVG/HTML), the repo includes `video_diagram.html` which renders the runtime flow and lists the exact manifest entries used.
+
 ## Core Capabilities
 
 - **Local-first generation**: Prefers Ollama when `http://127.0.0.1:11434` is available.
@@ -277,6 +304,16 @@ This project should be tested as a sequence of observable proofs, not just "does
 - Verify the masked head count increases and the next generation runs with that head zeroed out.
 
 If all five tests pass, the idea is not just "interesting on paper" but working as an end-to-end system.
+
+## Submission & Form
+
+If you're preparing a submission or a short demo, a local `form.md` file is provided in the repository root and is ignored by git (see `.gitignore`). `form.md` contains a filled project submission form with the project description, demo script, tech stack, and notes about OpenMetadata usage. Use that file as a basis for any hackathon or demo submission and paste the YouTube demo link there once available.
+
+Suggested next steps for public demos:
+
+- Record a 2–3 minute demo that follows the demo narrative (prompt → trace → quarantine → re-run).
+- Optional: deploy the frontend to Vercel and backend to a small VM or container registry to produce a public deployment link.
+
 
 ## Useful Endpoints
 
