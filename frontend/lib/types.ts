@@ -54,6 +54,15 @@ export interface TraceSummary {
   masked_heads_applied: string[];
 }
 
+export interface EvidenceQuality {
+  score: number;
+  label: string;
+  exactness: string;
+  causal_validation: string;
+  black_box_gaps: string[];
+  recommended_next_actions: string[];
+}
+
 export interface AttentionTrace {
   source_prompt: string;
   generation_model: string;
@@ -63,6 +72,7 @@ export interface AttentionTrace {
   trace_fidelity: TraceFidelity;
   match_score?: number | null;
   fidelity_reason?: string | null;
+  evidence_quality?: EvidenceQuality | null;
   prompt_token_count: number;
   generated_text: string;
   analysis_error?: string | null;

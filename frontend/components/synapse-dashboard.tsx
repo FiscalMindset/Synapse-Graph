@@ -48,7 +48,7 @@ export function SynapseDashboard() {
   const [responseText, setResponseText] = useState("");
   const [trace, setTrace] = useState<AttentionTrace | null>(null);
   const [selectedLayerIndex, setSelectedLayerIndex] = useState(0);
-  const [executionMode, setExecutionMode] = useState<TraceExecutionMode>("faithful");
+  const [executionMode, setExecutionMode] = useState<TraceExecutionMode>("auto");
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -450,6 +450,7 @@ function ExplainabilityPanel({
   isRunning?: boolean;
 }) {
   const summary = trace?.summary ?? null;
+  const evidenceQuality = trace?.evidence_quality ?? null;
 
   return (
     <div className="panel-shell rounded-sm p-4">
@@ -487,6 +488,30 @@ function ExplainabilityPanel({
               "Run a probe to see the dominant layers, heads, and source tokens behind the output."}
           </p>
         </div>
+
+        {evidenceQuality ? (
+          <div className="border border-line bg-panel2/60 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <p className="panel-label">Evidence Quality</p>
+              <p className="metric-mono text-xs text-zinc-100">
+                {evidenceQuality.label.toUpperCase()} / {(evidenceQuality.score * 100).toFixed(0)}%
+              </p>
+            </div>
+            <p className="mt-2 text-xs leading-5 text-muted">{evidenceQuality.exactness}</p>
+            <p className="mt-2 metric-mono text-[11px] uppercase tracking-[0.2em] text-muted">
+              {evidenceQuality.causal_validation.replaceAll("_", " ")}
+            </p>
+            {evidenceQuality.black_box_gaps.length ? (
+              <div className="mt-3 space-y-1">
+                {evidenceQuality.black_box_gaps.slice(0, 3).map((gap) => (
+                  <p key={gap} className="text-xs leading-5 text-amber-200">
+                    {gap}
+                  </p>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
         <ChipGroup
           label="Dominant Heads"

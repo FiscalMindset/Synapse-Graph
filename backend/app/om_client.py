@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import quote
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 import uuid
 
@@ -54,12 +54,35 @@ class OpenMetadataSettings(BaseSettings):
         extra="ignore",
     )
 
-    openmetadata_enabled: bool = True
-    openmetadata_host: str = "http://127.0.0.1:8585/api"
+    openmetadata_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("SYNAPSE_OPENMETADATA_ENABLED", "OPENMETADATA_ENABLED"),
+    )
+    openmetadata_host: str = Field(
+        default="http://127.0.0.1:8585/api",
+        validation_alias=AliasChoices("SYNAPSE_OPENMETADATA_HOST", "OPENMETADATA_HOST"),
+    )
     openmetadata_auth_provider: str = "openmetadata"
-    openmetadata_jwt_token: str | None = None
-    openmetadata_email: str | None = None
-    openmetadata_password: str | None = None
+    openmetadata_jwt_token: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "SYNAPSE_OPENMETADATA_JWT_TOKEN",
+            "OPENMETADATA_JWT_TOKEN",
+            "OPENMETADATA_API_KEY",
+        ),
+    )
+    openmetadata_email: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "SYNAPSE_OPENMETADATA_EMAIL",
+            "OPENMETADATA_EMAIL",
+            "OPENMETADATA_USERNAME",
+        ),
+    )
+    openmetadata_password: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("SYNAPSE_OPENMETADATA_PASSWORD", "OPENMETADATA_PASSWORD"),
+    )
     openmetadata_request_timeout_seconds: float = 15.0
     openmetadata_token_refresh_skew_seconds: float = 60.0
 
@@ -70,6 +93,11 @@ class OpenMetadataSettings(BaseSettings):
     openmetadata_classification_name: str = "SynapseQuarantine"
     openmetadata_defective_tag_name: str = "DEFECTIVE"
     openmetadata_lineage_top_heads_per_layer: int = 2
+
+    @model_validator(mode="after")
+    def normalize_openmetadata_host(self) -> OpenMetadataSettings:
+        self.openmetadata_host = _normalize_openmetadata_host(self.openmetadata_host)
+        return self
 
 
 class TableBinding(BaseModel):
@@ -704,6 +732,13 @@ def _sanitize_name(raw_name: str) -> str:
     if sanitized[0].isdigit():
         sanitized = f"Model_{sanitized}"
     return sanitized[:128]
+
+
+def _normalize_openmetadata_host(raw_host: str) -> str:
+    host = raw_host.rstrip("/")
+    if host.endswith("/api"):
+        return host
+    return f"{host}/api"
 
 
 def _parse_head_index(head_name: str | None) -> int | None:

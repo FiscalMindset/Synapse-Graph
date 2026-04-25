@@ -51,6 +51,17 @@ class TraceFidelity(StrEnum):
     PROXY = "proxy"
 
 
+class EvidenceQuality(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    score: float = Field(ge=0.0, le=1.0)
+    label: str
+    exactness: str
+    causal_validation: str
+    black_box_gaps: list[str] = Field(default_factory=list)
+    recommended_next_actions: list[str] = Field(default_factory=list)
+
+
 class GenerationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -158,6 +169,7 @@ class AttentionTrace(BaseModel):
     analysis_error: str | None = None
     match_score: float | None = None
     fidelity_reason: str | None = None
+    evidence_quality: EvidenceQuality | None = None
     summary: TraceSummary | None = None
     steps: list[TokenStepCapture] = Field(default_factory=list)
 
@@ -365,6 +377,9 @@ class HookedTransformerRunner:
     def get_masked_heads(self) -> list[HeadMask]:
         return self._mask_store.snapshot_models()
 
+    def is_ready(self) -> bool:
+        return self._tokenizer is not None and self._model is not None
+
     async def capture_trace(
         self,
         request: GenerationRequest,
@@ -493,6 +508,7 @@ class HookedTransformerRunner:
                         break
 
                 trace = trace.model_copy(update={"summary": self._summarize_trace(trace)})
+                trace = trace.model_copy(update={"evidence_quality": _assess_trace_evidence(trace)})
                 yield GenerationChunk(
                     backend=GenerationBackend.HUGGINGFACE,
                     model=self._settings.hf_model_name,
@@ -1019,9 +1035,28 @@ class NeuralInferenceEngine:
         step_listener: StepListener | None = None,
     ) -> AsyncIterator[GenerationChunk]:
         ollama_available = self.settings.use_ollama_if_available and await self._ollama.is_available()
-        use_ollama = request.execution_mode != TraceExecutionMode.FAITHFUL and ollama_available
+        if request.execution_mode == TraceExecutionMode.FAITHFUL:
+            await self._hooked_runner.ensure_loaded()
+
+        tracer_ready = self._hooked_runner.is_ready()
+        use_ollama = (
+            ollama_available
+            and (
+                request.execution_mode != TraceExecutionMode.FAITHFUL
+                or not tracer_ready
+            )
+        )
 
         if use_ollama:
+            faithful_downgrade_reason: str | None = None
+            if request.execution_mode == TraceExecutionMode.FAITHFUL and not tracer_ready:
+                faithful_downgrade_reason = (
+                    "Faithful tracing was requested, but the Hugging Face tokenizer/model is not "
+                    "loaded. Falling back to Ollama generation with proxy evidence. Set "
+                    "SYNAPSE_HF_MODEL_NAME to a real Hugging Face repo id for exact tracing."
+                )
+                LOGGER.warning(faithful_downgrade_reason)
+
             shadow_request = request.model_copy(
                 update={
                     "max_new_tokens": self.settings.shadow_max_new_tokens or request.max_new_tokens,
@@ -1066,8 +1101,12 @@ class NeuralInferenceEngine:
                         analysis_mode=AnalysisMode.SHADOW,
                         trace_fidelity=TraceFidelity.PROXY,
                         prompt_token_count=1,
-                        analysis_error="Shadow tracer unavailable or not preloaded.",
+                        analysis_error=faithful_downgrade_reason
+                        or "Shadow tracer unavailable or not preloaded.",
                     )
+                    match_score = None
+                    final_fidelity = TraceFidelity.PROXY
+                    fidelity_reason = faithful_downgrade_reason or "No shadow HF trace was available for comparison."
                 else:
                     try:
                         trace = await shadow_task
@@ -1100,7 +1139,7 @@ class NeuralInferenceEngine:
                             LOGGER.debug(
                                 "Could not attach match metadata to trace; continuing with minimal trace."
                             )
-                # Compute a similarity score between the Ollama output and the
+                    # Compute a similarity score between the Ollama output and the
                     # shadow HF trace. If they match (within a high threshold) we
                     # can safely promote the trace to exact evidence; otherwise keep
                     # it labeled as proxy and include a match score.
@@ -1144,7 +1183,25 @@ class NeuralInferenceEngine:
                             "trace_fidelity": final_fidelity,
                             "match_score": match_score,
                             "fidelity_reason": fidelity_reason,
+                            "evidence_quality": _assess_trace_evidence(
+                                trace,
+                                trace_fidelity=final_fidelity,
+                                match_score=match_score,
+                                analysis_error=trace.analysis_error,
+                            ),
                             "summary": summary,
+                        }
+                    )
+                if trace.evidence_quality is None:
+                    trace = trace.model_copy(
+                        update={
+                            "evidence_quality": _assess_trace_evidence(
+                                trace,
+                                trace_fidelity=final_fidelity,
+                                match_score=match_score,
+                                analysis_error=trace.analysis_error,
+                            ),
+                            "fidelity_reason": fidelity_reason,
                         }
                     )
 
@@ -1156,10 +1213,23 @@ class NeuralInferenceEngine:
                 )
                 return
             except Exception:
-                shadow_task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await shadow_task
+                if shadow_task is not None:
+                    shadow_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await shadow_task
                 raise
+
+        if not tracer_ready:
+            await self._hooked_runner.ensure_loaded()
+            tracer_ready = self._hooked_runner.is_ready()
+
+        if not tracer_ready:
+            raise RuntimeError(
+                "Exact black-box tracing requires a loaded Hugging Face tokenizer/model. "
+                f"The configured SYNAPSE_HF_MODEL_NAME='{self.settings.hf_model_name}' could not be loaded. "
+                "Use a real Hugging Face repo id for SYNAPSE_HF_MODEL_NAME, or enable Ollama and use "
+                "execution_mode='auto' for proxy-only generation."
+            )
 
         async for chunk in self._hooked_runner.generate_stream(
             request,
@@ -1395,3 +1465,80 @@ def _build_trace_summary_explanation(
     if masked_heads_applied:
         explanation_parts.append(f"{len(masked_heads_applied)} masked heads were enforced during the run.")
     return " ".join(explanation_parts)
+
+
+def _assess_trace_evidence(
+    trace: AttentionTrace,
+    *,
+    trace_fidelity: TraceFidelity | None = None,
+    match_score: float | None = None,
+    analysis_error: str | None = None,
+) -> EvidenceQuality:
+    fidelity = trace_fidelity or trace.trace_fidelity
+    resolved_match_score = trace.match_score if match_score is None else match_score
+    resolved_error = analysis_error or trace.analysis_error
+    has_steps = bool(trace.steps)
+    has_lineage = any(step.high_activation_path for step in trace.steps)
+
+    score = 0.2
+    if has_steps:
+        score += 0.25
+    if has_lineage:
+        score += 0.15
+    if trace.summary is not None:
+        score += 0.1
+    if fidelity == TraceFidelity.EXACT:
+        score += 0.25
+    elif resolved_match_score is not None:
+        score += max(0.0, min(resolved_match_score, 1.0)) * 0.15
+    if resolved_error:
+        score -= 0.2
+    score = max(0.0, min(score, 1.0))
+
+    if score >= 0.8:
+        label = "high"
+    elif score >= 0.55:
+        label = "medium"
+    else:
+        label = "low"
+
+    if fidelity == TraceFidelity.EXACT:
+        exactness = "Generated tokens and captured activations came from the same hooked model run."
+    else:
+        exactness = (
+            "Generation and tracing were decoupled; the trace should be treated as proxy evidence "
+            "unless the shadow output closely matches the live output."
+        )
+
+    gaps: list[str] = []
+    actions: list[str] = []
+    if fidelity == TraceFidelity.PROXY:
+        gaps.append("Proxy trace cannot prove that the displayed heads caused the live output.")
+        actions.append("Use execution_mode='faithful' for exact hooked generation when latency permits.")
+    if resolved_match_score is None and trace.generation_backend == GenerationBackend.OLLAMA:
+        gaps.append("No generator-vs-shadow match score is available for this run.")
+        actions.append("Preload a compatible Hugging Face shadow model before using fast Ollama mode.")
+    elif resolved_match_score is not None and resolved_match_score < 0.995:
+        gaps.append(f"Shadow output diverged from live output (match_score={resolved_match_score:.3f}).")
+        actions.append("Align the Ollama and Hugging Face model families or lower claims to proxy telemetry.")
+    if not has_steps:
+        gaps.append("No per-token attention steps were captured.")
+        actions.append("Verify Hugging Face tracing is loaded and output_attentions is supported.")
+    if not has_lineage:
+        gaps.append("No high-activation lineage path was emitted.")
+        actions.append("Check capture thresholds and attention hook compatibility for the selected model.")
+    gaps.append("Attention weights are mechanism telemetry, not complete causal proof by themselves.")
+    actions.append("Validate suspicious heads with ablation or counterfactual replay before governance decisions.")
+
+    return EvidenceQuality(
+        score=round(score, 3),
+        label=label,
+        exactness=exactness,
+        causal_validation=(
+            "validated_by_same_run_hooks"
+            if fidelity == TraceFidelity.EXACT and has_lineage
+            else "requires_ablation_or_replay"
+        ),
+        black_box_gaps=_dedupe_tokens(gaps),
+        recommended_next_actions=_dedupe_tokens(actions),
+    )

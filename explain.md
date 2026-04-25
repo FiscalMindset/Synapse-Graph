@@ -1,652 +1,405 @@
-# Synapse-Graph — Explanation and Quick Demo
+# AI Autopsy Engine / Synapse-Graph Explanation
 
-This document explains what Synapse-Graph does, why we mapped model internals to OpenMetadata, how that helps turn AI from a black box into a traceable system, and how to run a quick test (including a live generated example included below).
+## Short Answer
 
-## Project summary
+AI Autopsy Engine attacks the AI black-box problem by turning each model run into an auditable record: prompt, model identity, traced internal activity, generated output, OpenMetadata lineage, and governance actions. The strongest part of the current solution is the live transformer tracing path: attention layers and heads are captured from a hooked Hugging Face model, mapped into OpenMetadata as model -> layer -> head assets, and rendered in the dashboard as a neural lineage route.
 
-- Synapse-Graph is a neural proxy and observability system that captures per-layer, per-head attention activity from a Hugging Face / PyTorch model while routing user-facing generation through a fast local generator (typically Ollama). The captured activations are translated into OpenMetadata assets (model → layers → heads) and lineage edges so operators can browse, tag, and govern internal neural components using a familiar metadata platform.
+The main gap is also important: attention activity is evidence, not complete causal proof. A head receiving high attention does not automatically mean it caused the final answer. The improved implementation now marks every trace with explicit `evidence_quality`, `black_box_gaps`, and recommended next actions so the product does not overclaim. Exact tracing, shadow tracing, ablation, replay, provenance, and governance are separated clearly.
 
-## Why OpenMetadata for model internals?
+## What Problem It Solves
 
-- Traditional logging and telemetry focus on surface signals (prompts, tokens, latencies, errors). They do not expose which internal components of the model (which layers or attention heads) were causally active for a response.
-- OpenMetadata provides a well-known, audited, and searchable cataloging system with entities, schemas, lineage, and tagging. By representing layers as tables and heads as columns, we can:
-  - Persist mechanistic evidence as first-class metadata assets.
-  - Create lineage edges from prompt → layer/head → generated token so analysts can query the causal route taken during inference.
-  - Use tags (e.g., `DEFECTIVE`) to apply governance actions that change runtime behavior (e.g., mask a head) without changing application code.
+Most AI observability tools show surface behavior:
 
-## How Synapse-Graph makes AI traceable
+- Prompt and response text.
+- Latency, errors, and token counts.
+- Sometimes retrieval sources or confidence scores.
 
-- Live generation: user prompts flow into the neural proxy. If Ollama is available, it handles fast token streaming.
-- Shadow tracer: concurrently, a hook-instrumented Hugging Face model runs inline or in shadow mode, capturing attention tensors per forward pass.
-- Translation: captured activations are mapped to OpenMetadata entities and lineage edges; the tracer also produces human-readable summaries and a dominant neural route for each generated token.
-- Governance loop: operators can tag heads/layers in OpenMetadata as `DEFECTIVE`. A sync endpoint picks up those tags and masks the corresponding heads on subsequent generations, enabling surgical runtime interventions.
+Those signals do not answer deeper operational questions:
 
-## When is evidence exact vs proxy?
+- Which model version produced this answer?
+- Which prompt tokens were most influential?
+- Which internal layers and attention heads were active?
+- Was this evidence captured from the same model run, or from a proxy tracer?
+- Can an operator isolate a suspicious neural component and verify the effect?
+- Can an auditor inspect the decision path later?
 
-- If the actual generator (Ollama) output and the shadow HF tracer output match closely, the system promotes the trace to `exact` fidelity and treats it as faithful evidence.
-- If they do not match, the trace remains `proxy` evidence: useful and informative but not claimed to be exact causality.
-- A configurable match threshold controls promotion (default: high sensitivity).
+AI Autopsy Engine is built to make those questions answerable through trace capture, metadata lineage, and controlled intervention.
 
-## How to run a quick test (local developer)
+## Current Architecture
 
-1. Ensure the backend is running (from repo root):
+```mermaid
+flowchart LR
+  U[User Prompt] --> FE[Next.js Dashboard]
+  FE --> API[FastAPI Neural Proxy]
+  API --> OLLAMA[Ollama Fast Generator]
+  API --> HF[Hooked Hugging Face Tracer]
+  HF --> TRACE[Attention + Head Activity]
+  TRACE --> API
+  API --> OM[OpenMetadata Catalog]
+  OM --> API
+  API --> FE
+```
+
+Core files:
+
+- `backend/app/inference.py`: generation, Hugging Face hooks, attention capture, trace fidelity, evidence quality, and head masking.
+- `backend/app/main.py`: FastAPI endpoints, streaming, session state, OpenMetadata sync, and lineage ingestion scheduling.
+- `backend/app/om_client.py`: OpenMetadata mapping, synthetic model/layer/head assets, lineage edges, and `DEFECTIVE` tag sync.
+- `frontend/components/synapse-dashboard.tsx`: operator dashboard, streaming response, graph, evidence quality, and governance status.
+- `frontend/lib/types.ts`: shared trace and evidence-quality types.
+
+## How The System Works
+
+1. A user sends a prompt from the dashboard or API.
+2. The backend selects an execution mode:
+   - `faithful`: Hugging Face model generates tokens while hooks capture the same run. This is exact evidence.
+   - `auto`: Ollama generates quickly when available while the Hugging Face model may trace in shadow mode. This is proxy evidence unless output matching is extremely close.
+3. During traced generation, hooks capture per-layer, per-head attention for the newest token.
+4. The backend summarizes each token step:
+   - active layers
+   - top heads
+   - source tokens receiving attention
+   - high-activation path
+   - masked heads applied
+5. The trace is converted into an OpenMetadata lineage graph:
+   - model as database
+   - layers as tables
+   - heads as columns
+   - prompt ingress and response egress as synthetic tables
+6. Operators can tag a layer/head as `DEFECTIVE` in OpenMetadata.
+7. The backend syncs those tags and masks matching attention heads in later traced generation.
+
+## What Is Strong
+
+- The solution moves beyond normal prompt/response logging and captures internal transformer signals.
+- It distinguishes `exact` tracing from `proxy` tracing.
+- It reuses OpenMetadata instead of inventing a new catalog or governance UI.
+- It supports an intervention loop: tag a head as defective, sync, then mask it during future generation.
+- The frontend presents model internals as an operator console rather than a generic chat UI.
+- The backend now exposes evidence quality directly in the trace instead of hiding uncertainty.
+
+## Where It Was Lacking
+
+The previous explanation and product framing had several gaps:
+
+1. It overclaimed causality from attention.
+   Attention weights reveal model mechanism telemetry, but attention alone is not a complete causal explanation. A high-attention head can be correlated with an output without being necessary for that output.
+
+2. It mixed two product stories.
+   The old `explain.md` described both a generic ML provenance SDK and the Synapse-Graph transformer tracer. That made the system look unfocused. The cleaned explanation now centers on the real repo implementation.
+
+3. Proxy and exact evidence were not prominent enough.
+   Fast Ollama generation plus shadow Hugging Face tracing is useful, but only exact when the outputs match closely. The implementation now emits `evidence_quality` with exactness, causal-validation status, gaps, and next actions.
+
+4. It did not explain how to validate a suspected defective head.
+   Masking is useful, but governance should be based on ablation or replay evidence, not only on high attention. The roadmap below adds a stricter validation loop.
+
+5. It lacked a clear privacy story.
+   Prompt text and trace artifacts can contain sensitive information. A production system needs redaction, retention policy, encryption, and access control.
+
+6. It lacked reproducibility metadata.
+   To fully replay an inference, the system should persist model revision, tokenizer revision, seed, decoding config, dependency versions, and hardware/runtime details.
+
+7. It lacked evaluation metrics.
+   To prove that the engine reduces black-box risk, it should measure trace coverage, proxy/exact ratio, replay success, ablation effect size, ingestion success, and false-positive quarantine rate.
+
+## What Was Improved In This Pass
+
+### Backend
+
+`backend/app/inference.py` now includes an `EvidenceQuality` model on every final trace when possible:
+
+- `score`: 0.0 to 1.0 confidence-style quality score for the trace evidence.
+- `label`: low, medium, or high.
+- `exactness`: explains whether generation and tracing came from the same run.
+- `causal_validation`: marks whether the run is already same-run-hook validated or still needs ablation/replay.
+- `black_box_gaps`: machine-readable list of remaining explanation gaps.
+- `recommended_next_actions`: concrete actions such as faithful rerun, shadow model preload, or ablation replay.
+
+This prevents the system from pretending that all traces are equally trustworthy.
+
+### Frontend
+
+`frontend/components/synapse-dashboard.tsx` now displays evidence quality in the Glassbox Summary panel. Operators can see:
+
+- evidence score
+- exact/proxy explanation
+- causal validation status
+- top black-box gaps
+
+This makes uncertainty visible where decisions are made.
+
+### Documentation
+
+This `explain.md` now describes:
+
+- what the system actually implements
+- what it solves
+- where it is still weak
+- how to test it
+- how to make it stronger from all angles
+
+## Evidence Levels
+
+| Evidence level | Meaning | Trust |
+| --- | --- | --- |
+| Surface log | prompt, response, latency only | Low |
+| Proxy trace | separate shadow model captures similar behavior | Medium if outputs match |
+| Exact hooked trace | same model run generates and captures activations | High for mechanism telemetry |
+| Ablation validated | masking/removing a head changes output as predicted | Strong causal evidence |
+| Replay reproducible | frozen model/config can recreate the run | Strong audit evidence |
+
+The current repo supports surface logs, proxy traces, exact hooked traces, and masking. The next major step is systematic ablation validation and replay.
+
+## How OpenMetadata Helps
+
+OpenMetadata is used as the operational memory of the system:
+
+- Model = synthetic database.
+- Transformer layer = table.
+- Attention head = column.
+- Prompt and response = ingress/egress tables.
+- Active routes = lineage edges.
+- `DEFECTIVE` tag = governance control.
+
+This makes model internals searchable, taggable, and auditable by the same kind of metadata platform data teams already use.
+
+## What OpenMetadata Is Actually Doing Here
+
+OpenMetadata is not running the model and it is not extracting neural activations. The backend does that. OpenMetadata is the catalog and governance layer:
+
+- It stores a synthetic model catalog: model -> transformer layers -> attention heads.
+- It receives lineage edges for active attention routes when tracing is available.
+- It stores the `SynapseQuarantine.DEFECTIVE` tag.
+- It lets an operator tag a layer or head, then the backend syncs those tags and masks matching heads on later traced runs.
+
+So OpenMetadata answers "what was observed, where is it cataloged, and what governance decision should apply?" It does not answer "what happened inside the model" by itself. That evidence comes from the Hugging Face hook tracer.
+
+## Why OpenMetadata Was Not Connected
+
+The error:
+
+```text
+Not Authorized! Token not present
+```
+
+means the OpenMetadata server at `http://127.0.0.1:8585` is reachable, but it requires authentication. The backend was trying to create database service/table/column entities without a bearer token.
+
+There was also a config mismatch:
+
+- The backend settings originally expected `SYNAPSE_OPENMETADATA_HOST`, `SYNAPSE_OPENMETADATA_EMAIL`, `SYNAPSE_OPENMETADATA_PASSWORD`, or `SYNAPSE_OPENMETADATA_JWT_TOKEN`.
+- Your `.env` used `OPENMETADATA_HOST`, `OPENMETADATA_USERNAME`, and `OPENMETADATA_PASSWORD`.
+
+The backend now accepts both naming styles and normalizes `http://localhost:8585` to `http://localhost:8585/api`. With the default local OpenMetadata credentials in `.env`, it should be able to log in and create the synthetic catalog.
+
+If OpenMetadata still reports offline, verify one of these auth paths:
+
+```bash
+SYNAPSE_OPENMETADATA_JWT_TOKEN=<token>
+```
+
+or:
+
+```bash
+SYNAPSE_OPENMETADATA_EMAIL=admin@open-metadata.org
+SYNAPSE_OPENMETADATA_PASSWORD=admin
+```
+
+The legacy names also work:
+
+```bash
+OPENMETADATA_USERNAME=admin@open-metadata.org
+OPENMETADATA_PASSWORD=admin
+```
+
+## Is It Tracking The Real Black Box Right Now?
+
+With this current config:
+
+```text
+SYNAPSE_OLLAMA_MODEL=phi3:latest
+SYNAPSE_HF_MODEL_NAME=phi3:latest
+```
+
+the answer is: it is not doing real internal tracing of `phi3:latest`.
+
+Reason: `phi3:latest` is an Ollama model name. Ollama exposes generated tokens through its HTTP API, but it does not expose per-layer attention tensors or head activations. The Hugging Face tracer needs a real Hugging Face repo id and tokenizer, not an Ollama tag.
+
+The runtime evidence levels are:
+
+- Ollama only: real generated text, but no real internal black-box trace. Evidence is proxy/minimal.
+- Ollama + different HF shadow model: real Ollama output plus real internals from a different model. Useful for demo telemetry, but not exact for Phi-3.
+- Hugging Face faithful mode with a valid HF model: real generation and real internal trace from the same hooked model run. This is the real black-box tracking path.
+
+To get real exact tracing, set `SYNAPSE_HF_MODEL_NAME` to a Hugging Face causal language model that can load locally with `output_attentions=True`. For example, a small development tracer:
+
+```bash
+SYNAPSE_HF_MODEL_NAME=gpt2
+SYNAPSE_PRELOAD_SHADOW_MODEL=true
+```
+
+For same-family Phi-3 tracing, use a real Hugging Face Phi-3 repo id, but expect much higher CPU/RAM cost:
+
+```bash
+SYNAPSE_HF_MODEL_NAME=microsoft/Phi-3-mini-4k-instruct
+SYNAPSE_HF_TRUST_REMOTE_CODE=true
+```
+
+If exact tracing matters more than speed, run with:
+
+```json
+"execution_mode": "faithful"
+```
+
+If speed matters and you accept proxy evidence, run with:
+
+```json
+"execution_mode": "auto"
+```
+
+## Example Flow
+
+Prompt:
+
+```text
+List inventions or practical devices Albert Einstein is credited with, and briefly explain each.
+```
+
+Faithful mode flow:
+
+1. Backend loads the Hugging Face model and tokenizer.
+2. The prompt is rendered with the configured chat template.
+3. Each generated token runs through the hooked transformer.
+4. Hooks capture the last-token attention matrix for every supported layer.
+5. Top heads and source tokens are summarized into `TokenStepCapture`.
+6. Final `AttentionTrace` is returned with `trace_fidelity="exact"`.
+7. Evidence quality should be higher because generation and tracing came from the same run.
+
+Fast mode flow:
+
+1. Ollama streams the answer quickly.
+2. Hugging Face may run a shadow trace.
+3. The backend compares Ollama output with shadow output using `match_score`.
+4. If the score is extremely high, evidence may be promoted. Otherwise it remains proxy.
+5. Evidence quality lists the remaining gaps.
+
+## How To Run
+
+Backend:
 
 ```bash
 cd backend
-source .venv/bin/activate   # if using the provided virtualenv
 python -m uvicorn app.main:app --reload --port 8000
 ```
 
-2. (Optional) If you need to access a private Hugging Face repo, export a token (do not commit this token to the repo):
-
-```bash
-export SYNAPSE_HF_TOKEN="<your_hf_hub_token>"
-# or HF_HUB_TOKEN / HF_TOKEN
-```
-
-3. From another shell, check service state and whether Ollama/HF are available:
+State:
 
 ```bash
 curl -sS http://127.0.0.1:8000/api/v1/state | jq .
 ```
 
-4. Send a generation request (example prompt uses a short factual query):
+Faithful exact run:
 
 ```bash
 curl -sS -X POST http://127.0.0.1:8000/api/v1/generate \
   -H 'Content-Type: application/json' \
-  -d '{"prompt": "List inventions or practical devices Albert Einstein is credited with, and briefly explain each.", "max_new_tokens": 150, "temperature": 0.1, "top_p": 0.95, "stop": [], "stream": false, "execution_mode": "auto"}' | jq .
+  -d '{
+    "prompt": "List inventions or practical devices Albert Einstein is credited with, and briefly explain each.",
+    "max_new_tokens": 120,
+    "temperature": 0.1,
+    "top_p": 0.95,
+    "stop": [],
+    "stream": false,
+    "execution_mode": "faithful"
+  }' | jq '.response.trace | {trace_fidelity, match_score, evidence_quality, summary}'
 ```
 
-5. Observe the returned JSON. The `response.text` field contains the generated text. The `response.trace` section contains per-step attention traces, `match_score`, and `trace_fidelity` which indicate whether the shadow tracer matched the generator.
+Fast/proxy run:
 
-## Example prompt used in this demo
+```bash
+curl -sS -X POST http://127.0.0.1:8000/api/v1/generate \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "prompt": "List inventions or practical devices Albert Einstein is credited with, and briefly explain each.",
+    "max_new_tokens": 120,
+    "temperature": 0.1,
+    "top_p": 0.95,
+    "stop": [],
+    "stream": false,
+    "execution_mode": "auto"
+  }' | jq '.response.trace | {generation_backend, trace_fidelity, match_score, evidence_quality}'
+```
 
-`List inventions or practical devices Albert Einstein is credited with, and briefly explain each.`
-
-## Live sample output (generated by the local proxy)
-
-> The real generated text from a live run is inserted below. If you ran the previous curl and see a different output, that reflects the live model used on your machine.
-
----
-
-> Albert Einstein did not directly create any specific inventions; however, his theories have led to numerous technological advancries that are often associated with him:
-
-> 1. **Photoelectric Effect (Einstein's Photo-Electric Equation)** - In 1905, Albert Einstein published a paper explaining the photoelectric effect where he proposed light could be thought of as discrete packets or quanta called photons and that these particles carried energy proportional to their frequency. This work laid foundational principles for quantum mechanics which later led to inventions like solar panels (photovoltaic cells) harnessing sunlight's energy, lasers used in various technologies
-
----
-
-Trace metadata (from this run):
-
-- **generation_backend:** ollama
-- **generation_model:** phi3:latest
-- **analysis_model:** phi3:latest
-- **trace_fidelity:** proxy
-- **analysis_error:** Shadow tracer unavailable or not preloaded.
-- **match_score:** null
-
-Note: the trace above is marked `proxy` because the Hugging Face shadow tracer was not available for this run; the system still returns the Ollama output and a minimal synthetic trace so the UI and metadata ingestion pipeline receive a usable payload.
-
----
-
-## Notes and troubleshooting
-
-- If the backend logs show HF hub `401` or `RepositoryNotFound` errors, either:
-  - Provide a valid HF token in `SYNAPSE_HF_TOKEN`/`HF_HUB_TOKEN` and restart the backend, or
-  - Use a local Ollama model (set `SYNAPSE_OLLAMA_MODEL` in `backend/.env`), which is preferred for fast interactive demos.
-- To force the HF tracer to attempt loading after setting a token, call:
+Preload Hugging Face tracer:
 
 ```bash
 curl -sS -X POST http://127.0.0.1:8000/api/v1/hf/preload | jq .
 ```
 
-## How this addresses the black-box problem
+Sync defective heads from OpenMetadata:
 
-- Surface-level tools only show tokens and timing. Synapse-Graph adds fine-grained internal evidence (attention tensors → dominant heads → lineage) and ties it to an auditable metadata catalog. This lets operators and auditors ask and answer causal questions like: "Which exact neural components were most responsible for this output?" and take surgical action (mask/remove a head) via the same governance interface used for data assets.
-
-## License / credits
-
-See the repository README for full license and contributor information.
-AI Autopsy Engine — explain.md
-
-Overview (start → finish)
-
-This document is a clear, step-by-step explanation of the AI Autopsy Engine (AAE) from first principles to hands-on testing. It explains the problem, the architecture, how OpenMetadata is used, how to instrument training and inference, the frontend user experience, and a complete example showing how a query such as "what invention done by albert einstein" travels through the system and becomes an auditable, explainable answer.
-
-Table of contents
-
-- Quick summary (1 page)
-- Motivation: the problem AAE solves
-- Architecture diagrams (Mermaid) — system, sequence, frontend
-- Components explained (backend, SDK, artifact store, OpenMetadata)
-- Frontend: screens, components, data flow, UX patterns
-- End-to-end walkthrough: deploy → instrument → query → investigate
-- Example: "what invention done by albert einstein"
-- How to test and validate
-- Troubleshooting & operational notes
-- Next steps and extensions
-
-Quick summary
-
-AAE makes each model prediction auditable and explainable by capturing: the model version, training datasets, feature transformations, the code commit, input snapshot, generated explanations (SHAP/counterfactuals), and storing structured metadata in OpenMetadata. The frontend surfaces answers with provenance and explanation artifacts so users can quickly investigate why a model returned a specific result.
-
-Motivation: why this matters
-
-- Real-world ML systems fail unpredictably; debugging requires linking a result to the exact inputs, code, and data that led to it.
-- Without a centralized catalog, teams waste time chasing logs and recreating contexts.
-- AAE provides a reproducible audit trail to accelerate debugging, compliance reviews, and trust-building.
-
-Architecture — visual overview (Mermaid)
-
-```mermaid
-flowchart LR
-  A[User / Client] -->|Query| B[Frontend API]
-  B --> C[Query Router]
-  C --> D[Model Service]
-  D --> E[Explanation Generator]
-  D --> F[Artifact Store]
-  E --> F
-  D --> G[Metadata Ingestor]
-  E --> G
-  G --> H[OpenMetadata]
-  H --> I[Metadata UI]
-  B --> I[Metadata UI]
+```bash
+curl -sS -X POST http://127.0.0.1:8000/api/v1/openmetadata/sync-defects | jq .
 ```
 
-Sequence diagram — query to explanation
-
-```mermaid
-sequenceDiagram
-  participant U as User
-  participant FE as Frontend
-  participant QR as QueryRouter
-  participant MS as ModelService
-  participant EG as ExplanationGen
-  participant AS as ArtifactStore
-  participant MI as MetadataIngestor
-  participant OM as OpenMetadata
-
-  U->>FE: POST /query {"query":"..."}
-  FE->>QR: route(query)
-  QR->>MS: infer(query)
-  MS->>AS: store(input_snapshot)
-  MS->>EG: request explanations
-  EG->>AS: store(explanation_artifact)
-  EG->>MI: send(explanation_metadata)
-  MS->>MI: send(inference_metadata)
-  MI->>OM: ingest(metadata)
-  OM-->>FE: metadata stored
-  MS-->>FE: answer + pointers
-  FE-->>U: answer + provenance + explanation_links
-```
-
-Frontend architecture (Mermaid)
-
-```mermaid
-flowchart TD
-  Q[QueryBar] --> R[ResultList]
-  R --> P[ProvenancePanel]
-  R --> X[ExplanationPanel]
-  P --> OM[OpenMetadataBrowser]
-  X --> A[ArtifactViewer]
-```
-
-Components explained (detailed)
-
-- Frontend API / Query endpoint: accepts user queries, forwards to the query router, and presents results with provenance and explanation links.
-- Query Router: selects model(s) (by domain, confidence, freshness) and aggregates responses when multiple sources are used.
-- Model Service: serves model inference, returns answer and confidence; integrates with the inference SDK.
-- Explanation Generator: computes SHAP, token attributions, or counterfactuals; configurable per-model.
-- Artifact Store: S3/MinIO/GCS for storing snapshots and explanation artifacts (URIs retained in OpenMetadata).
-- Metadata Ingestor: writes structured entities (InferenceRecord, Explanation) and lineage to OpenMetadata via REST API.
-- OpenMetadata: central catalog for datasets, models, lineage, and the linked explanation artifacts.
-- Frontend UI: components for search, result display, provenance graph, and artifact preview. See Frontend section below.
-
-Frontend: screens and components (user-facing)
-
-1) Query screen
-- QueryBar: natural language input with optional filters (model, date range, dataset).
-- Recent Queries feed: shows recent inferences and quick links to their provenance.
-
-2) Result screen (single query)
-- AnswerPane: main text answer, model confidence.
-- SourcesList: RAG citations or retriever doc snippets with links.
-- ExplanationPanel: summarized explanation (top features/tokens) with a link to full artifact.
-- ProvenancePanel: compact lineage showing model version, training dataset(s), pipeline run, and code commit. Clickable to open OpenMetadata UI.
-
-3) Metadata Explorer (OpenMetadata integration)
-- Embedded view or link to OpenMetadata entity pages for datasets, models, and pipeline runs.
-- ProvenanceGraph: visual lineage from dataset → pipeline → model → inference.
-
-4) Artifact Viewer
-- Lightweight JSON viewer for SHAP arrays, token attributions, and counterfactuals with small charts and highlightable tokens.
-
-Frontend data flow and interactions
-
-- QueryBar POSTs /query to backend; backend returns answer + metadata pointers.
-- ExplanationPanel fetches artifact JSON from artifact store via signed URL (or via backend proxy if auth required).
-- ProvenancePanel uses OpenMetadata REST API to load detailed entity pages and lineage graphs when requested.
-
-End-to-end walkthrough: deploy → instrument → query → investigate
-
-Prerequisites
-- Docker & docker-compose or Kubernetes
-- OpenMetadata (self-hosted or cloud) with admin API key
-- Object storage (MinIO/local S3 or cloud bucket)
-- Python/Node dev environment for SDK and frontend
-
-Deploy minimal stack (local)
-1) Start OpenMetadata (docker-compose from OpenMetadata docs).
-2) Start MinIO (or configure cloud bucket); create a bucket for artifacts.
-3) Configure environment variables for AAE:
-   - OPENMETADATA_HOST (e.g., http://localhost:8585)
-   - OPENMETADATA_API_KEY
-   - ARTIFACT_BASE_URI (e.g., http://localhost:9000/bucket)
-   - STORAGE_ACCESS_KEY / STORAGE_SECRET (securely passed)
-4) Start AAE services (docker-compose up): Query API, ModelService (demo), MetadataIngestor.
-5) Start frontend (npm install && npm start) and open http://localhost:3000.
-
-Instrument training & inference (step-by-step)
-
-Training instrumentation (at end of training):
-- Upload model artifact to artifact store and record artifact_uri.
-- Post a Model entity to OpenMetadata with fields: name, version, artifact_uri, commit_sha, training_run_id, metrics.
-- Record training datasets in OpenMetadata and add lineage edges: dataset -> training_run -> model.
-
-Inference instrumentation (live):
-- Inference SDK computes features_hash, assigns inference_id, stores a small input snapshot to artifact store, and calls explanation generator (sync or async).
-- The SDK posts a JSON (inference metadata) to MetadataIngestor which writes InferenceRecord and Explanation entities in OpenMetadata.
-
-Example instrumentation pseudocode (Python-like)
-
-```python
-from aae_sdk import InferenceRecorder, ExplanationGen
-
-recorder = InferenceRecorder(metadata_ingest_url, artifact_store)
-
-def serve_request(input_text):
-    model_output = model.predict(input_text)
-    explanation = ExplanationGen.compute(model, input_text)
-    # recorder uploads artifacts and posts metadata
-    recorder.record_inference(
-        model_id='wiki-qa-2026-01-v2',
-        input_text=input_text,
-        model_output=model_output,
-        explanation=explanation
-    )
-    return model_output.answer
-```
-
-Concrete example: "what invention done by albert einstein"
-
-1) User submits query via frontend or curl:
-
-curl -s -X POST "http://localhost:8080/query" \
-  -H "Content-Type: application/json" \
-  -d '{"query":"what invention done by albert einstein"}' | jq
-
-2) Backend steps
-- QueryRouter selects model "wiki-qa-2026-01-v2" and calls ModelService.
-- ModelService assigns inference_id inf-20260425-0001 and stores input_snapshot at ARTIFACT_BASE_URI/inputs/inf-20260425-0001.json.
-- ModelService calls ExplanationGen, stores artifact at ARTIFACT_BASE_URI/explain/exp-9001.json.
-- MetadataIngestor writes two entities to OpenMetadata:
-  - InferenceRecord {inference_id, model_id, input_uri, response, confidence}
-  - Explanation {explanation_id, inference_id, method, artifact_uri, summary}
-
-3) Final response format (returned to frontend)
-
-{
-  "answer": "Albert Einstein co-invented the Einstein–Szilard refrigerator and is known for the theory of relativity.",
-  "model_version": "wiki-qa-2026-01-v2",
-  "confidence": 0.92,
-  "sources": [ {"name":"wikipedia:Albert_Einstein","link":"https://en.wikipedia.org/wiki/Albert_Einstein"} ],
-  "provenance": [ {"inference_id":"inf-20260425-0001","model_id":"wiki-qa-2026-01-v2","dataset_ids":["wikipedia_dump_2025"],"artifact_link":"http://localhost:9000/explain/exp-9001.json"} ],
-  "explanations": [ {"id":"exp-9001","method":"token-attribution","summary":"Top tokens: Einstein, refrigerator, Szilard, invention","artifact":"http://localhost:9000/explain/exp-9001.json"} ]
-}
-
-Investigating the result in the frontend
-
-- Click ProvenancePanel -> opens model page on OpenMetadata showing training_run_id and dataset list.
-- Click ExplanationPanel -> opens ArtifactViewer fetching the artifact JSON via signed URL; highlights tokens with attribution scores.
-- Use Metadata Explorer to view lineage and click the train job to inspect data preprocessing steps and the commit SHA.
-
-How this solves the AI black box, concretely
-
-- Linkage: every inference_id links to model_id, dataset_id(s), commit SHA, and explanation artifact.
-- Reproducibility: by following the lineage, an operator can re-run the training/inference with the same artifacts and confirm behavior.
-- Explainability: artifact viewers and summaries expose the feature/ token-level reasons for outputs.
-- Governance: OpenMetadata stores searchable records, so audits can fetch all inferences tied to a model or dataset within a time window.
-
-Testing and validation (concrete tests)
-
-1) Unit tests
-- Mock the artifact store and OpenMetadata; assert that recorder.upload() and ingest() are called with stable IDs.
-
-2) Integration tests
-- Run docker-compose with OpenMetadata and MinIO; run demo_server; POST /query and assert:
-  - HTTP 200
-  - JSON contains answer, provenance, explanations
-  - OpenMetadata API returns an InferenceRecord with the same inference_id
-
-3) Manual QA checklist for a query
-- Does the frontend show: answer, confidence, top sources, explanation summary, and a clickable provenance link?
-- Does OpenMetadata show: inference entity, explanation entity, model entity, dataset(s) with lineage?
-- Can the artifact be downloaded and parsed locally?
-
-Troubleshooting (common failure modes)
-
-- 401/403 from OpenMetadata: check API key, ensure service account has ingest permissions.
-- Artifact 404: check upload path and bucket policies; confirm ARTIFACT_BASE_URI is correct.
-- Missing explanation: ensure ExplanationGenerator is configured for the model; check logs for computation errors.
-- Large storage use: enable sampling (store full input for 1% of inferences) and retain aggregated summaries for older records.
-
-Security and privacy
-
-- DO NOT store raw PII in artifact store unless encrypted and access controlled. Prefer feature hashes and redacted snapshots.
-- Use signed URLs for artifact access and short-lived tokens for UI previews.
-
-Operational recommendations
-
-- Sample inferences for full tracing to balance cost vs. auditability (e.g., 1-5% full snapshots, but store compact explanation summaries for all).
-- Automate periodic scans of feature attribution drift and attach alerts to OpenMetadata model pages.
-
-Extending AAE
-
-- Add more explanation methods: influence functions, integrated gradients, contrastive explanations.
-- Provide a replay service that can re-run any inference_id against a frozen model artifact.
-- Export compliance reports (CSV/JSON) that list inferences, models, datasets, and explanation summaries over time ranges.
-
-Appendix: useful commands and examples
-
-- Run demo query:
-  curl -s -X POST "http://localhost:8080/query" -H "Content-Type: application/json" -d '{"query":"what invention done by albert einstein"}' | jq
-
-- Check InferenceRecord in OpenMetadata (example):
-  curl -s -H "Authorization: Bearer $OPENMETADATA_API_KEY" "${OPENMETADATA_HOST}/api/v1/inferences?inference_id=inf-20260425-0001" | jq
-
-- Download explanation artifact:
-  curl -s -o exp-9001.json "http://localhost:9000/explain/exp-9001.json"
-
-Files and locations in repository (where to look)
-
-- /sdk/python/ — inference + training SDK
-- /connectors/openmetadata/ — ingestion helpers (OpenMetadata client wrappers)
-- /examples/demo_server.py — simple model + explanation generator + /query endpoint
-- /frontend/ — React app with components QueryBar, ResultList, ExplanationPanel, ProvenancePanel
-- /docs/deployment.md — exact docker-compose/helm commands and secrets guidance
-
-Contact & contribution
-
-Open issues or PRs in this repository. When requesting help, include: OpenMetadata version, artifact store type, sample ingestion payloads, and any relevant logs.
-
-
-
-## Technical deep-dive: activations, attention, and explanation methods
-
-This section explains, in practical detail, how internal neural signals (activations, attention) are captured and converted into explanation artifacts, why each method was chosen, and how to reproduce the same signals for debugging or governance.
-
-1) Activations (neuron outputs)
-
-- What they are: activations are the numeric outputs of intermediate layers (e.g., after linear + nonlinearity). They represent the internal feature-space that the model computes while producing a prediction.
-- Why capture them: activations let engineers inspect which neurons or channels had high responses for a given input. A sudden shift in a layer's activation distribution may indicate data drift or model brittleness.
-- How to extract (PyTorch example):
-
-  - Use register_forward_hook on modules you care about:
-
-    def hook(module, input, output):
-        # output can be Tensor or tuple
-        activations_store[module_name].append(output.detach().cpu().numpy())
-
-    handle = module.register_forward_hook(hook)
-    # run inference
-    handle.remove()
-
-  - For Hugging Face transformer models, you can also request outputs.attentions and outputs.hidden_states by setting output_attentions=True and output_hidden_states=True when calling the model.
-
-- Storage format (recommended): store activations per-inference as compressed JSON or ndjson references with:
-  {
-    "inference_id": "inf-...",
-    "model_id": "...",
-    "layer": "transformer.h.6",          # canonical layer name
-    "shape": [1, 128, 1024],              # batch, tokens, hidden
-    "dtype": "float32",
-    "stats": {"min":..., "max":..., "mean":..., "std":...},
-    "artifact_uri": "s3://bucket/activations/inf-.../layer-6.npz"
-  }
-
-  Store full arrays as compressed binary (np.savez) and keep small summaries inline in the metadata record to enable quick queries without downloading large blobs.
-
-2) Attention (transformer attention weights)
-
-- What it is: attention matrices (per-head) quantify how much each token attends to every other token. For a transformer with H heads and L layers, you get L * H matrices of shape (tokens, tokens) per forward pass.
-- Extraction: Hugging Face returns attentions when configured; otherwise, use hooks or model.forward(..., output_attentions=True).
-- Aggregation/interpretation:
-  - Per-head inspection: some heads specialize (syntax, coreference). Rank heads by average entropy or max weight.
-  - Head aggregation: mean across heads, or take a weighted sum using head importance metrics (e.g., gradient-based importance).
-  - Attention rollout: multiply attention matrices across layers to approximate a direct token→token flow map.
-
-- Storage: store top-k attention pairs (src_token, dst_token, weight) for compactness and store full matrices as compressed arrays when needed.
-
-3) Explanation methods and how they relate to activations/attention
-
-- Gradient-based saliency (gradient × input): uses the gradient of the model output wrt input embeddings to produce token-level saliency scores. Easy to compute but noisy.
-
-  Pseudocode (PyTorch):
-
-    input_emb.requires_grad_(True)
-    output = model(input_emb)
-    output[:, target_index].backward()
-    saliency = (input_emb.grad * input_emb).sum(dim=-1)
-
-- Integrated Gradients (IG): integrates gradients along a path from a baseline to the input. Reduces gradient noise and satisfies axioms (sensitivity, completeness).
-
-  Pseudocode outline:
-
-    baseline = zeros_like(input)
-    steps = 50
-    total_grad = 0
-    for alpha in linspace(0,1,steps):
-        x = baseline + alpha * (input - baseline)
-        out = model(x)
-        out[target].backward()
-        total_grad += x.grad
-    ig = (input - baseline) * total_grad / steps
-
-- SHAP (KernelSHAP / DeepSHAP / TreeSHAP): game-theoretic attributions that explain model output as an additive contribution of features.
-  - DeepSHAP uses model-specific approximations for deep nets, combining background references and linear approximations per layer.
-  - SHAP is often expensive; compute in sampled mode or for representative inferences only.
-
-- LIME: locally approximates model behavior with an interpretable surrogate (linear) model around the input sample.
-
-- Counterfactual search: find the smallest input change that flips model prediction. Useful for action-oriented explanations (what to change to alter outcome).
-
-4) Attention vs gradient vs shap: when to trust which signal
-
-- Attention alone is not an explanation (it is a mechanism). Combined with gradient-based or perturbation methods (e.g., gradient×attention or attention rollout) it becomes more informative.
-- Gradient methods are fast but sensitive to noise. IG or SmoothGrad variants reduce noise.
-- SHAP is principled but computationally heavy; use on sampled inferences or lower-dimensional inputs.
-
-5) Mapping internals to OpenMetadata artifacts (recommended schema)
-
-- InferenceRecord (OpenMetadata entity / custom):
-  - inference_id, model_id, timestamp, input_uri, response, confidence, short_explanation_summary, artifact_uris[]
-- Explanation entity: id, inference_id, method, artifact_uri (full artifact), summary, key_metrics
-- Activation artifact: object in artifact store (npz/npz.gz) with metadata record pointing to it
-- Attention artifact: similar storage; provide both full matrix (for offline analysis) and top-k pairs (for UI rendering)
-
-6) Practical implementation details
-
-- Sampling & cost control: run full activation capture for a configurable percentage (e.g., 1% of inferences) and store only compact summaries for others.
-- Async pipelines: compute expensive explanations asynchronously (background worker) and update OpenMetadata/response when ready. The /query endpoint can return preliminary summary and later provide a link to the full artifact.
-- Determinism: record RNG seeds and library versions. For PyTorch, set torch.use_deterministic_algorithms(True) where possible for reproducible activations.
-- Privacy: never store raw PII in plaintext. Use redaction, token hashing, or encrypted storage for input snapshots.
-
-7) Example: extracting activations from a Hugging Face transformer (PyTorch)
-
-- Minimal extraction snippet:
-
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-    import torch
-
-    model = AutoModelForCausalLM.from_pretrained('gpt2', output_attentions=True, output_hidden_states=True)
-    tokenizer = AutoTokenizer.from_pretrained('gpt2')
-
-    input_ids = tokenizer.encode("What did Einstein invent?", return_tensors='pt')
-    with torch.no_grad():
-        out = model(input_ids)
-    # hidden states: tuple(len=layers+1) of tensors (batch, seq_len, hidden)
-    hidden_states = out.hidden_states
-    attentions = out.attentions
-
-    # summarize layer 6 activations
-    layer6 = hidden_states[6][0].cpu().numpy()  # shape: seq_len x hidden
-    # compute stats
-    import numpy as np
-    stats = { 'min': float(np.min(layer6)), 'max': float(np.max(layer6)), 'mean': float(np.mean(layer6)) }
-
-    # save compressed
-    np.savez_compressed('artifacts/activations/inf-1234/layer6.npz', layer6=layer6)
-
-8) Artifact size and retention
-
-- Hidden states and attention tensors can be large (O(tokens^2) for full attention matrices). Consider:
-  - Storing only top-k attention pairs per-token (e.g., top-5 attended tokens) for UI use.
-  - Compressing arrays and storing in object storage with lifecycle rules.
-  - Retaining full arrays for a short time (e.g., 7–30 days) and keeping summaries long-term.
-
-9) Linking activations to explanations in the UI
-
-- The frontend should show a concise summary first (top tokens, top contributing layers/heads). Clicking the explanation should fetch the artifact (signed URL) and render:
-  - Token attribution heatmap
-  - Attention graphs
-  - Simple charts of activation distributions (boxplot per-layer)
-
-10) Reproducibility & verification
-
-- Always store the full training environment snapshot (package versions, model commit SHA, training run ID) with the model entity in OpenMetadata.
-- For high-fidelity audits, enable the replay capability: re-run an inference against a frozen model + frozen environment to reproduce activations and confirm the original explanation.
-
-11) Summary recommendations
-
-- Capture both lightweight summaries (token attributions, top-k attention pairs) for all inferences and full arrays for sampled inferences.
-- Use OpenMetadata to store pointers and structured summaries; use artifact store for bulky arrays.
-- Prefer IG or SHAP when you need stronger axiomatic guarantees; prefer gradient × input or attention-based signals for fast, approximate explanations.
-
-
-
-## Full sample: end-to-end (input → artifact → OpenMetadata)
-
-This sample walks through a single inference from a user query to stored artifacts and metadata. Two variants are shown: (A) using the bundled demo services (ingestor + demo server) and (B) using your existing backend at http://localhost:8000.
-
-A) Bundled demo (recommended for first run)
-
-1) Start services (from repo root):
-
-- Metadata ingestor (saves records under ./artifacts/ingested):
-  python -m uvicorn ingestor_server:app --host 0.0.0.0 --port 8001
-
-- Demo query service (handles /query and uses the SDK to write artifacts):
-  python -m uvicorn demo_server:app --host 0.0.0.0 --port 8002
-
-2) Send query (curl):
-
-curl -s -X POST "http://localhost:8002/query" \
-  -H "Content-Type: application/json" \
-  -d '{"query":"what invention done by albert einstein"}' | jq
-
-Expected response (trimmed):
-
-{
-  "answer": "Albert Einstein co-invented the Einstein–Szilard refrigerator and is known for the theory of relativity.",
-  "model_version": "demo-wiki-qa-v1",
-  "confidence": 0.92,
-  "provenance": [{"inference_id":"inf-...","artifact_link":"http://localhost:9000/explain/inf-....json"}],
-  "explanations": [{"id":"http://localhost:9000/explain/inf-....json","method":"token-attribution+activations","summary":"Top tokens: Einstein, refrigerator, Szilard","artifact":"http://localhost:9000/explain/inf-....json"}]
-}
-
-3) Inspect stored artifacts on disk (bundled ingestor + SDK write to ./artifacts):
-
-ls artifacts/
-# inputs/inf-....json  explain/inf-....json  ingested/inference/*.json  ingested/explanation/*.json
-
-Example artifact: artifacts/explain/inf-xxxx.json
-
-{
-  "inference_id": "inf-xxxx",
-  "explanation": {
-    "method": "token-attribution+activations",
-    "summary": "Top tokens: Einstein, refrigerator, Szilard",
-    "attributions": [{"token":"Albert","score":0.05}, ...],
-    "activations": {"layer_1":[...],"layer_2":[...]},
-    "attention": [[...]]
-  }
-}
-
-4) Inspect ingested metadata written by the ingestor (local files):
-
-cat artifacts/ingested/inference/inf-xxxx.json | jq
-cat artifacts/ingested/explanation/exp-xxxx.json | jq
-
-These files show the exact payload the MetadataIngestor would forward into OpenMetadata. In a production setup the ingestor would call OpenMetadata APIs to create entities instead of writing files.
-
-B) Using your existing backend (http://localhost:8000)
-
-If your backend exposes the same /query endpoint and is already instrumented to call a metadata ingestor, run the same curl against port 8000:
-
-curl -s -X POST "http://localhost:8000/query" -H "Content-Type: application/json" -d '{"query":"what invention done by albert einstein"}' | jq
-
-Then:
-- Check the metadata ingestor logs (or OpenMetadata) to verify an InferenceRecord and Explanation were created for the returned inference_id.
-- Example OpenMetadata ingestion payloads (what the ingestor should post):
-
-InferenceRecord (POST /api/v1/inferences or custom ingest endpoint)
-
-{
-  "inference_id": "inf-xxxx",
-  "timestamp": "2026-04-25T13:00:00Z",
-  "model_id": "demo-wiki-qa-v1",
-  "input_uri": "s3://bucket/inputs/inf-xxxx.json",
-  "response": "Albert Einstein co-invented...",
-  "confidence": 0.92,
-  "explanation_uri": "s3://bucket/explain/inf-xxxx.json"
-}
-
-Explanation entity (POST /api/v1/explanations or custom ingest)
-
-{
-  "explanation_id": "exp-xxxx",
-  "inference_id": "inf-xxxx",
-  "method": "token-attribution+activations",
-  "summary": "Top tokens: Einstein, refrigerator, Szilard",
-  "artifact_uri": "s3://bucket/explain/inf-xxxx.json",
-  "key_metrics": {"top_token_score": 1.0}
-}
-
-C) From OpenMetadata UI (what to look for)
-
-- Search the model name (demo-wiki-qa-v1) and open the model's page.
-- Under "Runs" or "Inferences" (custom entity), find the inference_id produced by the demo. Click it to view the recorded fields and links to artifacts.
-- Click the artifact link to open the ArtifactViewer (or download the JSON) and inspect token attributions, activations, attention matrix, and any counterfactuals.
-
-D) Expected developer verification checklist
-
-- HTTP: /query returns 200 with answer, provenance and explanation pointer.
-- File artifacts: ./artifacts/inputs/inf-....json and ./artifacts/explain/inf-....json exist.
-- Ingestor: ./artifacts/ingested/inference/inf-....json and ./artifacts/ingested/explanation/exp-....json exist (if using bundled ingestor) or OpenMetadata contains corresponding entities (in prod).
-- Artifact content: explanation JSON contains attributions, activations summary, and attention information.
-
-Notes on mapping sample to production
-
-- Replace local artifact URIs (http://localhost:9000/...) with your real object-storage URIs and signed URLs in production.
-- Configure the MetadataIngestor to transform the ingest payloads into OpenMetadata entity creation calls (dataset, model, inference custom entity, explanation entity) using OpenMetadata's REST API.
-
-Troubleshooting the sample
-
-- If curl returns an error: ensure demo server is running (port 8002) and ingestor is running (port 8001) when using the bundled demo.
-- If artifacts are missing: check file permissions and that ARTIFACT_BASE_URI is configured consistently between SDK and ingestor.
-- If OpenMetadata shows no entities: verify the ingestor is configured to forward to OpenMetadata and that OPENMETADATA_API_KEY is valid.
-
--- end of sample flow
-
--- End of explain.md --
-
+## Validation Checklist
+
+- Does `/api/v1/state` report topology when the Hugging Face tracer is loaded?
+- Does faithful mode return `trace_fidelity="exact"`?
+- Does fast Ollama mode return `proxy` unless the shadow output matches?
+- Does every final trace include `evidence_quality`?
+- Do captured steps include layers, top heads, source tokens, and high-activation paths?
+- Does OpenMetadata create model/layer/head assets?
+- Does tagging a head as `DEFECTIVE` appear in the backend masked-head list after sync?
+- Does a later traced run mark that head as masked?
+- Does the UI show evidence quality and black-box gaps?
+
+## Production Hardening Needed
+
+To solve the black-box problem more completely, add these capabilities:
+
+1. Ablation validation service
+   - Rerun the same prompt with selected heads masked.
+   - Measure output divergence, logit delta, and answer-quality change.
+   - Mark a head as suspicious only when effect size crosses a threshold.
+
+2. Replay service
+   - Persist model revision, tokenizer revision, seed, decoding settings, library versions, and hardware.
+   - Recreate any inference by `session_id`.
+
+3. Strong artifact governance
+   - Redact or hash sensitive prompt tokens.
+   - Encrypt trace artifacts.
+   - Use short-lived signed URLs.
+   - Define retention policies for full tensors vs summaries.
+
+4. Multi-method explanations
+   - Combine attention telemetry with gradient saliency, integrated gradients, perturbation tests, and counterfactuals.
+   - Store method-specific artifacts separately and compare agreement.
+
+5. Evaluation dashboard
+   - Trace coverage percentage.
+   - Proxy vs exact ratio.
+   - Average evidence-quality score.
+   - OpenMetadata ingestion failures.
+   - Quarantine false positives.
+   - Replay success rate.
+
+6. Safer governance workflow
+   - Require ablation evidence before auto-masking in production.
+   - Add approvals for high-impact model changes.
+   - Keep an audit trail of who tagged, synced, and masked each head.
+
+## Final Assessment
+
+The solution is no longer a simple implementation. It has the core pieces of an AI black-box investigation platform:
+
+- internal neural telemetry
+- exact vs proxy trace labeling
+- metadata lineage
+- live dashboard
+- governance tags
+- head masking
+- explicit evidence-quality reporting
+
+The main remaining work is to move from "this head was active" to "this head was causally necessary." That requires ablation, replay, and multi-method agreement. The current implementation now names that gap clearly and gives operators the data needed to close it.
