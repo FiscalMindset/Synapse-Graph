@@ -39,7 +39,7 @@ from metadata.generated.schema.type.entityLineage import ColumnLineage, Entities
 from metadata.generated.schema.type.entityReference import EntityReference
 from metadata.ingestion.ometa.ometa_api import OpenMetadata
 
-from .inference import ModelTopology, TokenStepCapture
+from .inference import ModelTopology, TokenStepCapture, HeadMask
 
 LOGGER = logging.getLogger(__name__)
 
@@ -93,6 +93,12 @@ class OpenMetadataSettings(BaseSettings):
     openmetadata_classification_name: str = "SynapseQuarantine"
     openmetadata_defective_tag_name: str = "DEFECTIVE"
     openmetadata_lineage_top_heads_per_layer: int = 2
+    # When set, incoming OpenMetadata webhooks must include this secret in the
+    # `X-OpenMetadata-Secret` header to be accepted by the neural proxy.
+    openmetadata_webhook_secret: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("SYNAPSE_OPENMETADATA_WEBHOOK_SECRET", "OPENMETADATA_WEBHOOK_SECRET"),
+    )
 
     @model_validator(mode="after")
     def normalize_openmetadata_host(self) -> OpenMetadataSettings:
@@ -233,6 +239,93 @@ class OpenMetadataNeuralMapper:
                 defective_heads.add((layer_table.layer_index, head_index))
 
         return defective_heads
+
+    async def apply_defective_tags(
+        self,
+        catalog: NeuralCatalogBinding,
+        pairs: set[tuple[int, int]],
+        reason: str | None = None,
+    ) -> list[HeadMask]:
+        """
+        Apply the defective/quarantine tag in OpenMetadata for the provided
+        set of (layer_index, head_index) pairs. Attempts to tag the specific
+        column representing the head; falls back to tagging the layer table.
+
+        Returns a list of HeadMask objects that were successfully applied.
+        """
+        if not self.settings.openmetadata_enabled or catalog is None:
+            return []
+
+        applied: list[HeadMask] = []
+
+        for layer_index, head_index in sorted(pairs):
+            layer_binding = catalog.layer_binding(layer_index)
+            if layer_binding is None:
+                continue
+
+            column_name = f"Head_{head_index + 1}"
+            table_fqn = layer_binding.table_fqn
+
+            # Prefer column-level tagging when the column exists in the catalog binding
+            if column_name in layer_binding.column_fqns:
+                path = f"/v1/tables/name/{quote(table_fqn, safe='')}/columns/{quote(column_name, safe='')}/tags"
+                payload = {"tagFQN": catalog.defective_tag_fqn}
+                try:
+                    attempt = 0
+                    response = None
+                    while attempt < 3:
+                        try:
+                            response = await self._request_with_managed_auth("POST", path, json=payload)
+                            response.raise_for_status()
+                            break
+                        except Exception:
+                            attempt += 1
+                            await asyncio.sleep(0.25 * (2 ** attempt))
+                    if response is None:
+                        raise RuntimeError("Column tag request failed after retries")
+                    applied.append(
+                        HeadMask(
+                            layer_index=layer_index,
+                            layer_name=f"Layer_{layer_index + 1}",
+                            head_index=head_index,
+                            head_name=column_name,
+                            reason=reason,
+                        )
+                    )
+                    continue
+                except Exception:
+                    # Fall through to attempt table-level tagging
+                    LOGGER.exception("Column-level tagging failed for %s.%s", table_fqn, column_name)
+
+            # Fallback: tag the whole layer table if column tagging is not available
+            try:
+                table_path = f"/v1/tables/name/{quote(table_fqn, safe='')}/tags"
+                payload = {"tagFQN": catalog.defective_tag_fqn}
+                attempt = 0
+                response = None
+                while attempt < 3:
+                    try:
+                        response = await self._request_with_managed_auth("POST", table_path, json=payload)
+                        response.raise_for_status()
+                        break
+                    except Exception:
+                        attempt += 1
+                        await asyncio.sleep(0.25 * (2 ** attempt))
+                if response is None:
+                    raise RuntimeError("Table tag request failed after retries")
+                applied.append(
+                    HeadMask(
+                        layer_index=layer_index,
+                        layer_name=f"Layer_{layer_index + 1}",
+                        head_index=head_index,
+                        head_name=column_name,
+                        reason=reason,
+                    )
+                )
+            except Exception:
+                LOGGER.exception("Failed to apply defective tag for table %s", table_fqn)
+
+        return applied
 
     async def ingest_step(
         self,

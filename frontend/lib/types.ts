@@ -95,6 +95,85 @@ export interface ModelTopology {
   layers: LayerTopology[];
 }
 
+export interface InferenceResponse {
+  backend: GenerationBackend;
+  generation_model: string;
+  analysis_model: string;
+  text: string;
+  trace: AttentionTrace;
+}
+
+export interface CircuitHead {
+  layer_index: number;
+  layer_name: string;
+  head_index: number;
+  head_name: string;
+  activation_score: number;
+}
+
+export interface CircuitAblationResult {
+  masked_heads: CircuitHead[];
+  output_text: string;
+  target_present: boolean;
+  target_count: number;
+  text_similarity: number;
+  causal_effect_score: number;
+  trace?: AttentionTrace | null;
+}
+
+export interface CircuitDiscoveryRequest {
+  prompt: string;
+  target_hallucination_token: string;
+  system_prompt?: string | null;
+  trace_model_name?: string | null;
+  max_new_tokens?: number;
+  top_k_heads?: number;
+  max_pair_sweeps?: number;
+}
+
+export interface CircuitDiscoveryResponse {
+  target_hallucination_token: string;
+  baseline: InferenceResponse;
+  baseline_target_present: boolean;
+  baseline_target_count: number;
+  candidate_heads: CircuitHead[];
+  sweep_results: CircuitAblationResult[];
+  discovered_circuit: CircuitHead[];
+  combined_causal_effect: number;
+  verdict: string;
+}
+
+export interface CausalAutopsyRequest {
+  prompt: string;
+  system_prompt?: string | null;
+  trace_model_name?: string | null;
+  max_new_tokens?: number;
+  layer_index?: number | null;
+  head_index?: number | null;
+}
+
+export interface CausalAutopsyResponse {
+  target: CircuitHead;
+  baseline: InferenceResponse;
+  ablated: InferenceResponse;
+  text_similarity: number;
+  causal_effect_score: number;
+  verdict: string;
+  interpretation: string;
+}
+
+export interface QuarantineRequest {
+  heads: CircuitHead[];
+  reason?: string | null;
+}
+
+export interface OpenMetadataWebhookResponse {
+  applied: boolean;
+  parsed_heads: HeadMask[];
+  masked_heads: HeadMask[];
+  reason: string;
+}
+
 export interface OpenMetadataStatus {
   enabled: boolean;
   connected: boolean;

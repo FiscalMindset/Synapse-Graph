@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import difflib
+from itertools import combinations
 import json
 import logging
+import re
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -125,6 +127,70 @@ class CausalAutopsyResponse(BaseModel):
     causal_effect_score: float
     verdict: str
     interpretation: str
+
+
+class CircuitDiscoveryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prompt: str = Field(min_length=1)
+    target_hallucination_token: str = Field(min_length=1)
+    system_prompt: str | None = None
+    trace_model_name: str = "gpt2"
+    max_new_tokens: int = Field(default=32, ge=1, le=256)
+    top_k_heads: int = Field(default=5, ge=1, le=20)
+    max_pair_sweeps: int = Field(default=10, ge=0, le=190)
+
+
+class CircuitHead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    layer_index: int
+    layer_name: str
+    head_index: int
+    head_name: str
+    activation_score: float
+
+
+class CircuitAblationResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    masked_heads: list[CircuitHead]
+    output_text: str
+    target_present: bool
+    target_count: int
+    text_similarity: float
+    causal_effect_score: float
+    trace: AttentionTrace | None = None
+
+
+class CircuitDiscoveryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target_hallucination_token: str
+    baseline: InferenceResponse
+    baseline_target_present: bool
+    baseline_target_count: int
+    candidate_heads: list[CircuitHead]
+    sweep_results: list[CircuitAblationResult]
+    discovered_circuit: list[CircuitHead]
+    combined_causal_effect: float
+    verdict: str
+
+
+class QuarantineRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    heads: list[CircuitHead]
+    reason: str | None = None
+
+
+class OpenMetadataWebhookResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    applied: bool
+    parsed_heads: list[HeadMask] = Field(default_factory=list)
+    masked_heads: list[HeadMask] = Field(default_factory=list)
+    reason: str
 
 
 class NeuralProxyRuntime:
@@ -358,6 +424,197 @@ class NeuralProxyRuntime:
                 f"Masking {target.layer_name}:{target.head_name} changed the deterministic replay "
                 f"with effect score {causal_effect_score:.3f}. {verdict}"
             ),
+        )
+
+    async def discover_circuit(self, request: CircuitDiscoveryRequest) -> CircuitDiscoveryResponse:
+        generation_request = GenerationRequest(
+            prompt=request.prompt,
+            system_prompt=request.system_prompt,
+            max_new_tokens=request.max_new_tokens,
+            temperature=0,
+            top_p=0.95,
+            stream=False,
+            execution_mode=TraceExecutionMode.FAITHFUL,
+            trace_model_name=request.trace_model_name,
+        )
+        await self._select_trace_model(generation_request)
+        await self.ensure_topology()
+
+        previous_masks = {
+            (mask.layer_index, mask.head_index)
+            for mask in self.inference.get_masked_heads()
+        }
+
+        try:
+            await self.inference.set_masked_heads(set())
+            baseline = await self.inference.generate(generation_request)
+            candidate_heads = _rank_circuit_heads(baseline.trace, top_k=request.top_k_heads)
+            baseline_target_count = _count_target_token(
+                baseline.text,
+                request.target_hallucination_token,
+            )
+
+            mask_groups: list[tuple[CircuitHead, ...]] = [(head,) for head in candidate_heads]
+            pair_groups = list(combinations(candidate_heads, 2))[: request.max_pair_sweeps]
+            mask_groups.extend(pair_groups)
+
+            sweep_results: list[CircuitAblationResult] = []
+            for mask_group in mask_groups:
+                await self.inference.set_masked_heads(
+                    {
+                        (head.layer_index, head.head_index)
+                        for head in mask_group
+                    }
+                )
+                ablated = await self.inference.generate(generation_request)
+                target_count = _count_target_token(
+                    ablated.text,
+                    request.target_hallucination_token,
+                )
+                text_similarity = difflib.SequenceMatcher(None, baseline.text, ablated.text).ratio()
+                target_reduction = _target_reduction_score(
+                    baseline_target_count=baseline_target_count,
+                    ablated_target_count=target_count,
+                )
+                causal_effect_score = max(
+                    0.0,
+                    min(1.0, max(1.0 - text_similarity, target_reduction)),
+                )
+                sweep_results.append(
+                    CircuitAblationResult(
+                        masked_heads=list(mask_group),
+                        output_text=ablated.text,
+                        target_present=target_count > 0,
+                        target_count=target_count,
+                        text_similarity=round(text_similarity, 4),
+                        causal_effect_score=round(causal_effect_score, 4),
+                        trace=ablated.trace,
+                    )
+                )
+        finally:
+            await self.inference.set_masked_heads(previous_masks)
+
+        best_result = _select_best_circuit_result(
+            sweep_results,
+            baseline_target_count=baseline_target_count,
+        )
+        discovered_circuit = best_result.masked_heads if best_result is not None else []
+        combined_effect = best_result.causal_effect_score if best_result is not None else 0.0
+
+        return CircuitDiscoveryResponse(
+            target_hallucination_token=request.target_hallucination_token,
+            baseline=baseline,
+            baseline_target_present=baseline_target_count > 0,
+            baseline_target_count=baseline_target_count,
+            candidate_heads=candidate_heads,
+            sweep_results=sweep_results,
+            discovered_circuit=discovered_circuit,
+            combined_causal_effect=combined_effect,
+            verdict=_circuit_verdict(
+                baseline_target_count=baseline_target_count,
+                best_result=best_result,
+                target_hallucination_token=request.target_hallucination_token,
+            ),
+        )
+
+    async def quarantine_circuit(self, request: QuarantineRequest) -> OpenMetadataWebhookResponse:
+        topology, catalog = await self.ensure_topology()
+        if not self.openmetadata_settings.openmetadata_enabled or catalog is None:
+            return OpenMetadataWebhookResponse(
+                applied=False,
+                parsed_heads=[],
+                masked_heads=self.inference.get_masked_heads(),
+                reason="OpenMetadata is not enabled or the catalog is not available.",
+            )
+
+        # Build pair set from provided heads
+        parsed_pairs: set[tuple[int, int]] = {
+            (h.layer_index, h.head_index) for h in request.heads
+        }
+
+        try:
+            # Attempt to push tags into OpenMetadata for each parsed pair
+            applied = await self.openmetadata.apply_defective_tags(catalog, parsed_pairs, reason=request.reason)
+
+            # Also ensure the runtime mask table is updated immediately
+            current_pairs = {
+                (mask.layer_index, mask.head_index)
+                for mask in self.inference.get_masked_heads()
+            }
+            current_pairs.update(parsed_pairs)
+            masked_heads = await self.inference.set_masked_heads(current_pairs)
+
+            parsed_heads = [
+                HeadMask(
+                    layer_index=layer,
+                    layer_name=f"Layer_{layer + 1}",
+                    head_index=head,
+                    head_name=f"Head_{head + 1}",
+                    reason=request.reason,
+                )
+                for (layer, head) in sorted(parsed_pairs)
+            ]
+
+            return OpenMetadataWebhookResponse(
+                applied=bool(applied),
+                parsed_heads=parsed_heads,
+                masked_heads=masked_heads,
+                reason=(
+                    "Quarantine tags applied to OpenMetadata and local mask updated."
+                    if applied
+                    else "No tags were applied in OpenMetadata."
+                ),
+            )
+        except Exception as exc:
+            return OpenMetadataWebhookResponse(
+                applied=False,
+                parsed_heads=[],
+                masked_heads=self.inference.get_masked_heads(),
+                reason=str(exc),
+            )
+
+    async def apply_openmetadata_webhook(
+        self,
+        payload: dict[str, Any],
+    ) -> OpenMetadataWebhookResponse:
+        topology, _ = await self.ensure_topology()
+        if not _payload_has_governance_tag(payload):
+            return OpenMetadataWebhookResponse(
+                applied=False,
+                masked_heads=self.inference.get_masked_heads(),
+                reason="Webhook ignored because it did not include a DEFECTIVE or QUARANTINED tag.",
+            )
+
+        parsed_pairs = _extract_webhook_head_pairs(payload, topology)
+        if not parsed_pairs:
+            return OpenMetadataWebhookResponse(
+                applied=False,
+                masked_heads=self.inference.get_masked_heads(),
+                reason=(
+                    "Webhook had a quarantine tag, but no Layer_N/Head_N reference could be parsed "
+                    "from the payload."
+                ),
+            )
+
+        current_pairs = {
+            (mask.layer_index, mask.head_index)
+            for mask in self.inference.get_masked_heads()
+        }
+        current_pairs.update(parsed_pairs)
+        masked_heads = await self.inference.set_masked_heads(current_pairs)
+        self._last_defect_sync_at = _utcnow()
+        self._openmetadata_connected = True
+        self._last_ingest_error = None
+
+        parsed_heads = [
+            mask for mask in masked_heads
+            if (mask.layer_index, mask.head_index) in parsed_pairs
+        ]
+        return OpenMetadataWebhookResponse(
+            applied=True,
+            parsed_heads=parsed_heads,
+            masked_heads=masked_heads,
+            reason="OpenMetadata governance event applied to the live PyTorch head routing table.",
         )
 
     async def _select_trace_model(self, request: GenerationRequest) -> None:
@@ -631,6 +888,29 @@ async def run_causal_autopsy(request: CausalAutopsyRequest) -> CausalAutopsyResp
     return await runtime.run_causal_autopsy(request)
 
 
+@app.post("/api/v1/autopsy/discover_circuit", response_model=CircuitDiscoveryResponse)
+async def discover_circuit(request: CircuitDiscoveryRequest) -> CircuitDiscoveryResponse:
+    return await runtime.discover_circuit(request)
+
+
+@app.post("/api/v1/webhooks/openmetadata", response_model=OpenMetadataWebhookResponse)
+async def openmetadata_webhook(request: Request) -> OpenMetadataWebhookResponse:
+    # Validate optional webhook secret header
+    secret_header = request.headers.get("X-OpenMetadata-Secret")
+    configured = runtime.openmetadata_settings.openmetadata_webhook_secret
+    if configured:
+        if not secret_header or secret_header != configured:
+            raise HTTPException(status_code=403, detail="Invalid webhook secret")
+
+    payload = await request.json()
+    return await runtime.apply_openmetadata_webhook(payload)
+
+
+@app.post("/api/v1/openmetadata/quarantine", response_model=OpenMetadataWebhookResponse)
+async def quarantine_openmetadata(request: QuarantineRequest) -> OpenMetadataWebhookResponse:
+    return await runtime.quarantine_circuit(request)
+
+
 @app.post("/api/v1/generate", response_model=GenerateResponse)
 async def generate(request: GenerationRequest) -> GenerateResponse:
     return await runtime.generate(request)
@@ -727,3 +1007,163 @@ def _causal_verdict(causal_effect_score: float) -> str:
     if causal_effect_score >= 0.05:
         return "Weak causal effect: output changed slightly under head ablation."
     return "No meaningful causal effect detected for this deterministic replay."
+
+
+def _rank_circuit_heads(trace: AttentionTrace, *, top_k: int) -> list[CircuitHead]:
+    scored: dict[tuple[int, int], CircuitHead] = {}
+    for step in trace.steps:
+        for layer in step.layers:
+            for head in layer.top_heads:
+                key = (layer.layer_index, head.head_index)
+                score = max(head.max_attention_score, head.mean_attention_score, head.l2_norm)
+                current = scored.get(key)
+                if current is None:
+                    scored[key] = CircuitHead(
+                        layer_index=layer.layer_index,
+                        layer_name=layer.layer_name,
+                        head_index=head.head_index,
+                        head_name=head.head_name,
+                        activation_score=round(score, 6),
+                    )
+                    continue
+                scored[key] = current.model_copy(
+                    update={"activation_score": round(max(current.activation_score, score), 6)}
+                )
+
+    ranked = sorted(
+        scored.values(),
+        key=lambda head: head.activation_score,
+        reverse=True,
+    )
+    if not ranked:
+        raise RuntimeError(
+            "No active heads were captured. Run faithful tracing with a valid Hugging Face model."
+        )
+    return ranked[:top_k]
+
+
+def _count_target_token(text: str, target: str) -> int:
+    target = target.strip()
+    if not target:
+        return 0
+
+    if re.fullmatch(r"\w+", target):
+        return len(re.findall(rf"\b{re.escape(target)}\b", text, flags=re.IGNORECASE))
+    return text.lower().count(target.lower())
+
+
+def _target_reduction_score(*, baseline_target_count: int, ablated_target_count: int) -> float:
+    if baseline_target_count <= 0:
+        return 0.0
+    reduced_by = max(0, baseline_target_count - ablated_target_count)
+    return reduced_by / baseline_target_count
+
+
+def _select_best_circuit_result(
+    sweep_results: list[CircuitAblationResult],
+    *,
+    baseline_target_count: int,
+) -> CircuitAblationResult | None:
+    if not sweep_results:
+        return None
+
+    def score(result: CircuitAblationResult) -> tuple[float, float, int]:
+        target_reduction = _target_reduction_score(
+            baseline_target_count=baseline_target_count,
+            ablated_target_count=result.target_count,
+        )
+        # Prefer circuits that remove the target token, then larger causal deltas,
+        # then smaller circuits for easier governance.
+        return (target_reduction, result.causal_effect_score, -len(result.masked_heads))
+
+    return max(sweep_results, key=score)
+
+
+def _circuit_verdict(
+    *,
+    baseline_target_count: int,
+    best_result: CircuitAblationResult | None,
+    target_hallucination_token: str,
+) -> str:
+    if baseline_target_count <= 0:
+        return (
+            f"Target token '{target_hallucination_token}' was not present in the "
+            "deterministic baseline, "
+            "so this run cannot prove a causal hallucination circuit for that token."
+        )
+    if best_result is None:
+        return "No ablation sweep completed; no circuit could be discovered."
+    if best_result.target_count == 0:
+        return (
+            "Circuit discovered: masking the returned head set removed the target token from the "
+            "deterministic replay."
+        )
+    if best_result.causal_effect_score >= 0.2:
+        return (
+            "Partial circuit found: the target token survived, but the deterministic replay "
+            "changed "
+            "enough to justify deeper pair or triple-head sweeps."
+        )
+    return "No causal circuit was proven by the top-head single and pair ablation sweep."
+
+
+def _payload_has_governance_tag(payload: dict[str, Any]) -> bool:
+    payload_text = _json_text(payload).upper()
+    return "DEFECTIVE" in payload_text or "QUARANTINED" in payload_text
+
+
+def _extract_webhook_head_pairs(
+    payload: dict[str, Any],
+    topology: ModelTopology,
+) -> set[tuple[int, int]]:
+    payload_text = _json_text(payload)
+    layer_numbers = _extract_number_set(payload_text, r"\blayer[_\s:./-]*(\d+)\b")
+    head_numbers = _extract_number_set(payload_text, r"\bhead[_\s:./-]*(\d+)\b")
+
+    pairs: set[tuple[int, int]] = set()
+    if layer_numbers and head_numbers:
+        for layer_number in layer_numbers:
+            for head_number in head_numbers:
+                layer_index = layer_number - 1
+                head_index = head_number - 1
+                if _topology_has_head(topology, layer_index, head_index):
+                    pairs.add((layer_index, head_index))
+        return pairs
+
+    if layer_numbers:
+        for layer_number in layer_numbers:
+            layer_index = layer_number - 1
+            layer = _topology_layer(topology, layer_index)
+            if layer is None:
+                continue
+            for head_index in range(layer.head_count):
+                pairs.add((layer_index, head_index))
+    return pairs
+
+
+def _json_text(payload: dict[str, Any]) -> str:
+    return json.dumps(payload, ensure_ascii=False, default=str)
+
+
+def _extract_number_set(text: str, pattern: str) -> set[int]:
+    values: set[int] = set()
+    for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+        try:
+            value = int(match.group(1))
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            values.add(value)
+    return values
+
+
+def _topology_layer(topology: ModelTopology, layer_index: int) -> Any | None:
+    for layer in topology.layers:
+        if layer.layer_index == layer_index:
+            return layer
+    return None
+
+
+def _topology_has_head(topology: ModelTopology, layer_index: int, head_index: int) -> bool:
+    layer = _topology_layer(topology, layer_index)
+    return layer is not None and 0 <= head_index < layer.head_count

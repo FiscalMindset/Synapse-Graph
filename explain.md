@@ -1,3 +1,89 @@
+# AI Autopsy Engine — Overview & How-To
+
+This document explains the architecture, workflows, and how to run the autopsy discovery and governance flows locally.
+
+## Architecture Overview
+
+- NeuralProxyRuntime: orchestrates inference, tracing, and OpenMetadata mapping.
+- NeuralInferenceEngine: runs model generations with tracing hooks and supports masking individual heads via `set_masked_heads()`.
+- OpenMetadataNeuralMapper: maps model topology (layers→tables, heads→columns) and can tag columns/tables as `DEFECTIVE`/`QUARANTINED`.
+- HeadMaskStore: in-memory store of head masks that the runtime snapshots at generation start.
+
+Mask semantics: masks are applied at generation start — changes affect subsequent generations only. Existing in-flight generations are not retroactively changed.
+
+## Key Endpoints
+
+- `POST /api/v1/autopsy/discover_circuit` — run a causal autopsy and ablation sweep. Returns `discovered_circuit` and `combined_causal_effect`. Includes ablated `trace` objects for overlay in the UI.
+- `POST /api/v1/openmetadata/quarantine` — take a list of head objects and push `DEFECTIVE`/`QUARANTINED` tags to OpenMetadata; updates runtime mask table so subsequent generations mask quarantined heads.
+
+## How OpenMetadata Mapping Works
+
+Each model layer is represented as a table in OpenMetadata. Heads within a layer map to columns named `Head_1`, `Head_2`, etc. The client will attempt to apply column-level tags first and fall back to table-level tagging if column operations fail.
+
+## Running Locally (Backend + Frontend)
+
+1. Start the backend
+
+```bash
+python -m uvicorn backend.app.main:app --reload --port 8000
+```
+
+2. Start the frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+3. Use the UI at `http://localhost:3000` (default) or call APIs directly.
+
+## Example cURL: Discovery
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/api/v1/autopsy/discover_circuit \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt":"Why is the sky green?","target_hallucination_token":"green","trace_model_name":"gpt2","max_new_tokens":32}'
+```
+
+Response includes `discovered_circuit` (list of heads), `combined_causal_effect`, and `sweep_results` with ablated `trace` objects.
+
+## Example cURL: Quarantine
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/api/v1/openmetadata/quarantine \
+  -H 'Content-Type: application/json' \
+  -H 'X-OpenMetadata-Secret: <your-secret>' \
+  -d '{"heads":[{"layer_index":1,"layer_name":"Layer_2","head_index":2,"head_name":"Head_3","activation_score":0.12}],"reason":"discovered_via_ui"}'
+```
+
+This will tag the head(s) in OpenMetadata and update the runtime's mask table so subsequent generations will have these heads masked.
+
+## Security Notes
+
+- Webhook endpoints validate `X-OpenMetadata-Secret` header against the configured `OPENMETADATA_WEBHOOK_SECRET` environment variable. Rotate secrets regularly.
+- If exposing these endpoints externally, gate them behind an API gateway and restrict access via authentication.
+
+## Testing
+
+Run Python tests from the repository root:
+
+```bash
+pytest -q
+```
+
+The integration test `backend/tests/test_discover_quarantine_integration.py` mocks generation to avoid heavy Hugging Face downloads while asserting the end-to-end flow.
+
+## CI
+
+- Add the provided GitHub Actions workflow to run tests and TypeScript typecheck on push and PRs (see `.github/workflows/ci.yml`).
+
+## Notes & Limitations
+
+- Masking changes are snapshot-based; they do not affect in-flight generations.
+- Discovery sweeps can be time-consuming; tune `top_k_heads` and pair/triple sweep limits for pragmatic runs.
+
+If you want, I can also add example fixtures and a lightweight mock server for OpenMetadata to run full integration tests locally.
 # AI Autopsy Engine / Synapse-Graph Explanation
 
 ## Short Answer

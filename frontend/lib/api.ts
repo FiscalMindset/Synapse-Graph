@@ -145,6 +145,54 @@ export async function streamGeneration(
   }
 }
 
+export async function postCausalAutopsy(
+  payload: Partial<import("./types").CausalAutopsyRequest>,
+): Promise<import("./types").CausalAutopsyResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/autopsy/causal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Causal autopsy failed: ${response.status}`);
+  }
+
+  return (await response.json()) as import("./types").CausalAutopsyResponse;
+}
+
+export async function postDiscoverCircuit(
+  payload: import("./types").CircuitDiscoveryRequest,
+): Promise<import("./types").CircuitDiscoveryResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/autopsy/discover_circuit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Discover circuit failed: ${response.status}`);
+  }
+
+  return (await response.json()) as import("./types").CircuitDiscoveryResponse;
+}
+
+export async function postQuarantineCircuit(
+  payload: import("./types").QuarantineRequest,
+): Promise<import("./types").OpenMetadataWebhookResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/openmetadata/quarantine`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Quarantine request failed: ${response.status}`);
+  }
+
+  return (await response.json()) as import("./types").OpenMetadataWebhookResponse;
+}
+
 function parseEventChunk(chunk: string): { event: string; data: unknown } | null {
   const lines = chunk.split("\n");
   let eventName = "message";

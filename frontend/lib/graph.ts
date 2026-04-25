@@ -17,14 +17,17 @@ export function buildSynapseGraph(
   topology: ModelTopology | null | undefined,
   trace: AttentionTrace | null | undefined,
   maskedHeads: HeadMask[],
+  overlayTrace?: AttentionTrace | null | undefined,
 ): { nodes: Node<SynapseNodeData>[]; edges: Edge[] } {
   if (!topology) {
     return { nodes: [], edges: [] };
   }
-
   const latestStep = trace?.steps.at(-1);
+  const overlayStep = overlayTrace?.steps.at(-1);
   const activeLayerNames = latestStep?.high_activation_path.map((item) => item.split(":")[0]) ?? [];
+  const overlayLayerNames = overlayStep?.high_activation_path.map((item) => item.split(":")[0]) ?? [];
   const activeLayerSet = new Set(activeLayerNames);
+  const overlayLayerSet = new Set(overlayLayerNames);
   const maskedByLayer = maskedHeads.reduce<Record<number, number>>((accumulator, mask) => {
     accumulator[mask.layer_index] = (accumulator[mask.layer_index] ?? 0) + 1;
     return accumulator;
@@ -141,6 +144,46 @@ export function buildSynapseGraph(
         filter: isActive ? "drop-shadow(0 0 9px rgba(57,255,20,0.44))" : "none",
       },
     });
+    // If overlay trace exists, add a secondary overlay edge showing the ablated path
+    const overlayIsActive =
+      (sourceId === "prompt" && Boolean(overlayLayerNames[0] && overlayLayerNames[0] === targetLayerName)) ||
+      (targetId === "response" && Boolean(overlayLayerNames.at(-1) && overlayLayerNames.at(-1) === sourceLayerName)) ||
+      (sourceLayerName !== undefined &&
+        targetLayerName !== undefined &&
+        overlayLayerSet.has(sourceLayerName) &&
+        overlayLayerSet.has(targetLayerName));
+
+    if (overlayTrace && overlayIsActive) {
+      edges.push({
+        id: `${sourceId}->${targetId}-overlay`,
+        source: sourceId,
+        target: targetId,
+        type: "smoothstep",
+        animated: true,
+        label: edgeLabel(sourceLayerName, targetLayerName, overlayStep?.high_activation_path ?? []),
+        labelShowBg: true,
+        labelBgPadding: [8, 4],
+        labelBgBorderRadius: 3,
+        labelBgStyle: {
+          fill: "rgba(16,17,19,0.96)",
+          stroke: "rgba(255,77,109,0.28)",
+          strokeWidth: 1,
+        },
+        labelStyle: {
+          fill: "#ffd1d1",
+          fontFamily: "var(--font-mono)",
+          fontSize: 11,
+          fontWeight: 700,
+        },
+        zIndex: 20,
+        style: {
+          stroke: "#ff4d6d",
+          strokeWidth: 2.2,
+          strokeDasharray: "6 4",
+          filter: "drop-shadow(0 0 8px rgba(255,77,109,0.18))",
+        },
+      });
+    }
   }
 
   return { nodes, edges };

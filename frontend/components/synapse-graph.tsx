@@ -21,6 +21,7 @@ interface SynapseGraphProps {
   trace: AttentionTrace | null | undefined;
   maskedHeads: HeadMask[];
   onSelectLayer: (layerIndex: number) => void;
+  overlayTrace?: AttentionTrace | null | undefined;
 }
 
 const nodeTypes = {
@@ -32,6 +33,7 @@ export function SynapseGraph({
   trace,
   maskedHeads,
   onSelectLayer,
+  overlayTrace,
 }: SynapseGraphProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState({ width: 1200, height: 720 });
@@ -56,7 +58,7 @@ export function SynapseGraph({
   }
 
   // Build the semantic nodes/edges then compute responsive positions based on container size.
-  const { nodes: rawNodes, edges } = buildSynapseGraph(topology, trace, maskedHeads);
+  const { nodes: rawNodes, edges } = buildSynapseGraph(topology, trace, maskedHeads, overlayTrace);
   const hasRealTopology = topology.layers.length > 0;
 
   const paddingX = 28;

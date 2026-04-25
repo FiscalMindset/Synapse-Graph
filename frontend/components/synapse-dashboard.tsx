@@ -10,6 +10,8 @@ import {
   clearLocalHeadMasks,
   fetchState,
   preloadHF,
+  postDiscoverCircuit,
+  postQuarantineCircuit,
   setLocalHeadMask,
   streamGeneration,
   syncOpenMetadataDefects,
@@ -68,6 +70,9 @@ export function SynapseDashboard() {
   const [responseText, setResponseText] = useState("");
   const [trace, setTrace] = useState<AttentionTrace | null>(null);
   const [selectedLayerIndex, setSelectedLayerIndex] = useState(0);
+  const [discovery, setDiscovery] = useState<import("@/lib/types").CircuitDiscoveryResponse | null>(null);
+  const [overlayTrace, setOverlayTrace] = useState<import("@/lib/types").AttentionTrace | null>(null);
+  const [targetToken, setTargetToken] = useState<string>("");
   const [executionMode, setExecutionMode] = useState<TraceExecutionMode>("faithful");
   const [maxNewTokens, setMaxNewTokens] = useState(32);
   const [temperature, setTemperature] = useState(0);
@@ -218,6 +223,71 @@ export function SynapseDashboard() {
       appendLog("ERROR", "Probe request failed before streaming completed.", message);
     } finally {
       setIsRunning(false);
+    }
+  }
+
+  async function handleDiscoverCircuit() {
+    setError(null);
+    appendLog("DISCOVERY", "Starting circuit discovery sweep.");
+    try {
+        const req: import("@/lib/types").CircuitDiscoveryRequest = {
+          prompt,
+          target_hallucination_token: targetToken || (prompt.split(" ").at(-1) ?? ""),
+          trace_model_name: traceModelName,
+          max_new_tokens: maxNewTokens,
+          top_k_heads: 6,
+          max_pair_sweeps: 12,
+        };
+
+      const result = await postDiscoverCircuit(req);
+      setDiscovery(result);
+      setOverlayTrace(null);
+      appendLog("DISCOVERY", `Discovery completed with ${result.sweep_results.length} sweep results.`);
+    } catch (discError) {
+      const message = discError instanceof Error ? discError.message : "Discovery failed.";
+      setError(message);
+      appendLog("ERROR", "Circuit discovery failed.", message);
+    }
+  }
+
+  async function handleViewSweepResult(index: number) {
+    if (!discovery) return;
+    const sweep = discovery.sweep_results[index];
+    setOverlayTrace(sweep.trace ?? null);
+    appendLog("DISCOVERY", `Showing overlay for sweep #${index + 1} (effect ${sweep.causal_effect_score}).`);
+  }
+
+  async function handleQuarantineSweepResult(index: number) {
+    if (!discovery) return;
+    const sweep = discovery.sweep_results[index];
+    try {
+      const payload: import("@/lib/types").QuarantineRequest = {
+        heads: sweep.masked_heads,
+        reason: `sweep_${index + 1}`,
+      };
+      const resp = await postQuarantineCircuit(payload);
+      appendLog("QUARANTINE", resp.reason);
+      const refreshed = await fetchState();
+      setState(refreshed);
+    } catch (err) {
+      appendLog("ERROR", "Quarantine sweep failed.", err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function handleQuarantineDiscoveredCircuit() {
+    if (!discovery) return;
+    try {
+      const payload: import("@/lib/types").QuarantineRequest = {
+        heads: discovery.discovered_circuit,
+        reason: "discovered_via_ui",
+      };
+      const resp = await postQuarantineCircuit(payload);
+      appendLog("QUARANTINE", resp.reason);
+      // refresh global state
+      const refreshed = await fetchState();
+      setState(refreshed);
+    } catch (qErr) {
+      appendLog("ERROR", "Quarantine failed.", qErr instanceof Error ? qErr.message : String(qErr));
     }
   }
 
@@ -495,7 +565,8 @@ export function SynapseDashboard() {
           <section>
             <SynapseGraph
               topology={topology}
-              trace={deferredTrace}
+                trace={deferredTrace}
+                overlayTrace={overlayTrace}
               maskedHeads={maskedHeads}
               onSelectLayer={setSelectedLayerIndex}
             />
@@ -505,6 +576,72 @@ export function SynapseDashboard() {
             <ActivationChart layer={selectedLayer} />
 
             <ExplainabilityPanel trace={activeTrace} latestStep={latestStep} onRerunFaithful={() => handleProbe("faithful")} isRunning={isRunning} />
+            <div className="panel-shell rounded-sm p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="panel-label">Causal Discovery</p>
+                  <h3 className="mt-2 text-lg font-medium text-zinc-50">Sweep heads to find causal circuits</h3>
+                </div>
+                <div className="metric-mono text-right text-xs text-muted">Discovery: quick</div>
+              </div>
+
+              <div className="mt-3 space-y-3">
+                <p className="text-xs text-muted">Target token: the token you consider a hallucination to remove.</p>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <input
+                    type="text"
+                    placeholder="target token (e.g. green)"
+                    className="rounded-sm border border-line bg-panel px-3 py-2 text-sm text-zinc-100 outline-none"
+                    value={targetToken}
+                    onChange={(e) => setTargetToken(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void handleDiscoverCircuit()}
+                    className="rounded-sm border border-accent bg-accent/12 px-3 py-2 text-xs text-accent"
+                  >
+                    Run Discovery
+                  </button>
+                </div>
+
+                {discovery ? (
+                  <div className="mt-2 space-y-2">
+                    <div className="border border-line bg-panel/70 p-2">
+                      <p className="text-sm text-zinc-100">Discovered Circuit</p>
+                      <p className="mt-1 text-xs text-muted">Combined effect: {discovery.combined_causal_effect}</p>
+                      <div className="mt-2 flex gap-2 flex-wrap">
+                        {discovery.discovered_circuit.map((h) => (
+                          <span key={`${h.layer_index}-${h.head_index}`} className="metric-mono border border-accent/25 bg-accent/8 px-2 py-1 text-[11px] text-accent">
+                            {h.layer_name}:{h.head_name}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="thin-scrollbar max-h-36 overflow-y-auto space-y-2">
+                      {discovery.sweep_results.map((s, i) => (
+                        <div key={i} className="border border-line p-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <div>
+                              <p className="text-xs text-zinc-100">Sweep #{i + 1}</p>
+                              <p className="mt-1 text-xs text-muted">Effect: {s.causal_effect_score} • Similarity: {s.text_similarity}</p>
+                            </div>
+                            <div className="flex gap-2">
+                              <button className="rounded-sm border border-line px-2 py-1 text-xs" onClick={() => void handleViewSweepResult(i)}>View Overlay</button>
+                              <button className="rounded-sm border border-rose-500 px-2 py-1 text-xs text-rose-300" onClick={() => void handleQuarantineSweepResult(i)}>Quarantine Sweep</button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="mt-2 flex gap-2">
+                      <button type="button" onClick={() => void handleQuarantineDiscoveredCircuit()} className="rounded-sm border border-rose-500 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">QUARANTINE CIRCUIT IN OPENMETADATA</button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            </div>
 
             <ResponsePanel responseText={responseText} latestStep={latestStep} error={error} />
 

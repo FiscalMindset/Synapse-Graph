@@ -1,0 +1,108 @@
+{
+  "inference_id": "inf-eae55481-1258-4fa8-97ca-640fd384366d",
+  "explanation": {
+    "method": "token-attribution+activations",
+    "summary": "Top tokens: Einstein, refrigerator, Szilard",
+    "attributions": [
+      {
+        "token": "what",
+        "score": 0.05
+      },
+      {
+        "token": "invention",
+        "score": 1.0
+      },
+      {
+        "token": "done",
+        "score": 0.05
+      },
+      {
+        "token": "by",
+        "score": 0.05
+      },
+      {
+        "token": "albert",
+        "score": 0.05
+      },
+      {
+        "token": "einstein",
+        "score": 1.0
+      }
+    ],
+    "activations": {
+      "layer_1": [
+        0.5134,
+        0.9924,
+        0.4125,
+        0.7162,
+        0.0513,
+        0.6608,
+        0.1296,
+        0.7505
+      ],
+      "layer_2": [
+        0.9407,
+        0.1387,
+        0.6214,
+        0.1423,
+        0.4769,
+        0.003
+      ]
+    },
+    "attention": [
+      [
+        0.079,
+        0.094,
+        0.131,
+        0.297,
+        0.291,
+        0.109
+      ],
+      [
+        0.259,
+        0.043,
+        0.054,
+        0.191,
+        0.274,
+        0.179
+      ],
+      [
+        0.226,
+        0.084,
+        0.174,
+        0.061,
+        0.202,
+        0.253
+      ],
+      [
+        0.086,
+        0.099,
+        0.205,
+        0.289,
+        0.27,
+        0.05
+      ],
+      [
+        0.047,
+        0.166,
+        0.08,
+        0.246,
+        0.427,
+        0.034
+      ],
+      [
+        0.25,
+        0.274,
+        0.006,
+        0.233,
+        0.03,
+        0.206
+      ]
+    ],
+    "counterfactual": {
+      "changed_input": "what invention done by szilard",
+      "changed_prediction": "Szilard co-invented the refrigerator with Einstein",
+      "delta_confidence": -0.02
+    }
+  }
+}
