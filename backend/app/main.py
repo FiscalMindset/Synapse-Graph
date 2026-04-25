@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import difflib
 import json
 import logging
 from contextlib import asynccontextmanager, suppress
@@ -21,6 +22,7 @@ from .inference import (
     InferenceResponse,
     ModelTopology,
     NeuralInferenceEngine,
+    TraceExecutionMode,
 )
 from .om_client import NeuralCatalogBinding, OpenMetadataNeuralMapper, OpenMetadataSettings
 
@@ -90,6 +92,39 @@ class LocalHeadMaskRequest(BaseModel):
 
     layer_index: int = Field(ge=0)
     head_index: int = Field(ge=0)
+
+
+class CausalAutopsyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prompt: str = Field(min_length=1)
+    system_prompt: str | None = None
+    trace_model_name: str = "gpt2"
+    max_new_tokens: int = Field(default=32, ge=1, le=256)
+    layer_index: int | None = Field(default=None, ge=0)
+    head_index: int | None = Field(default=None, ge=0)
+
+
+class CausalAutopsyTarget(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    layer_index: int
+    layer_name: str
+    head_index: int
+    head_name: str
+    selection_reason: str
+
+
+class CausalAutopsyResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target: CausalAutopsyTarget
+    baseline: InferenceResponse
+    ablated: InferenceResponse
+    text_similarity: float
+    causal_effect_score: float
+    verdict: str
+    interpretation: str
 
 
 class NeuralProxyRuntime:
@@ -262,6 +297,68 @@ class NeuralProxyRuntime:
 
     async def clear_local_head_masks(self) -> list[HeadMask]:
         return await self.inference.set_masked_heads(set())
+
+    async def run_causal_autopsy(self, request: CausalAutopsyRequest) -> CausalAutopsyResponse:
+        await self._select_trace_model(
+            GenerationRequest(
+                prompt=request.prompt,
+                system_prompt=request.system_prompt,
+                max_new_tokens=request.max_new_tokens,
+                temperature=0,
+                top_p=0.95,
+                stream=False,
+                execution_mode=TraceExecutionMode.FAITHFUL,
+                trace_model_name=request.trace_model_name,
+            )
+        )
+        await self.ensure_topology()
+
+        previous_masks = {
+            (mask.layer_index, mask.head_index)
+            for mask in self.inference.get_masked_heads()
+        }
+
+        baseline_request = GenerationRequest(
+            prompt=request.prompt,
+            system_prompt=request.system_prompt,
+            max_new_tokens=request.max_new_tokens,
+            temperature=0,
+            top_p=0.95,
+            stream=False,
+            execution_mode=TraceExecutionMode.FAITHFUL,
+            trace_model_name=request.trace_model_name,
+        )
+
+        try:
+            await self.inference.set_masked_heads(set())
+            baseline = await self.inference.generate(baseline_request)
+            target = _select_autopsy_target(
+                baseline.trace,
+                layer_index=request.layer_index,
+                head_index=request.head_index,
+            )
+
+            await self.inference.set_masked_heads({(target.layer_index, target.head_index)})
+            ablated = await self.inference.generate(baseline_request)
+        finally:
+            await self.inference.set_masked_heads(previous_masks)
+
+        text_similarity = difflib.SequenceMatcher(None, baseline.text, ablated.text).ratio()
+        causal_effect_score = max(0.0, min(1.0, 1.0 - text_similarity))
+        verdict = _causal_verdict(causal_effect_score)
+
+        return CausalAutopsyResponse(
+            target=target,
+            baseline=baseline,
+            ablated=ablated,
+            text_similarity=round(text_similarity, 4),
+            causal_effect_score=round(causal_effect_score, 4),
+            verdict=verdict,
+            interpretation=(
+                f"Masking {target.layer_name}:{target.head_name} changed the deterministic replay "
+                f"with effect score {causal_effect_score:.3f}. {verdict}"
+            ),
+        )
 
     async def _select_trace_model(self, request: GenerationRequest) -> None:
         if not request.trace_model_name:
@@ -529,6 +626,11 @@ async def clear_local_head_masks() -> StateResponse:
     )
 
 
+@app.post("/api/v1/autopsy/causal", response_model=CausalAutopsyResponse)
+async def run_causal_autopsy(request: CausalAutopsyRequest) -> CausalAutopsyResponse:
+    return await runtime.run_causal_autopsy(request)
+
+
 @app.post("/api/v1/generate", response_model=GenerateResponse)
 async def generate(request: GenerationRequest) -> GenerateResponse:
     return await runtime.generate(request)
@@ -566,3 +668,62 @@ def _format_sse(event_name: str, payload: dict[str, Any]) -> str:
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _select_autopsy_target(
+    trace: AttentionTrace,
+    *,
+    layer_index: int | None,
+    head_index: int | None,
+) -> CausalAutopsyTarget:
+    if layer_index is not None and head_index is not None:
+        return CausalAutopsyTarget(
+            layer_index=layer_index,
+            layer_name=f"Layer_{layer_index + 1}",
+            head_index=head_index,
+            head_name=f"Head_{head_index + 1}",
+            selection_reason="User-selected target head.",
+        )
+
+    candidates: list[tuple[float, int, str, int, str]] = []
+    for step in trace.steps:
+        for layer in step.layers:
+            if layer_index is not None and layer.layer_index != layer_index:
+                continue
+            for head in layer.top_heads:
+                if head_index is not None and head.head_index != head_index:
+                    continue
+                candidates.append(
+                    (
+                        head.max_attention_score,
+                        layer.layer_index,
+                        layer.layer_name,
+                        head.head_index,
+                        head.head_name,
+                    )
+                )
+
+    if not candidates:
+        raise RuntimeError("No traced head was available to ablate. Run faithful tracing with a valid HF model.")
+
+    _, selected_layer_index, selected_layer_name, selected_head_index, selected_head_name = max(
+        candidates,
+        key=lambda item: item[0],
+    )
+    return CausalAutopsyTarget(
+        layer_index=selected_layer_index,
+        layer_name=selected_layer_name,
+        head_index=selected_head_index,
+        head_name=selected_head_name,
+        selection_reason="Automatically selected highest-attention head from the baseline trace.",
+    )
+
+
+def _causal_verdict(causal_effect_score: float) -> str:
+    if causal_effect_score >= 0.5:
+        return "Strong causal effect: output changed substantially under head ablation."
+    if causal_effect_score >= 0.2:
+        return "Moderate causal effect: output changed measurably under head ablation."
+    if causal_effect_score >= 0.05:
+        return "Weak causal effect: output changed slightly under head ablation."
+    return "No meaningful causal effect detected for this deterministic replay."

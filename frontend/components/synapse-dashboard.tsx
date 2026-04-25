@@ -79,7 +79,10 @@ export function SynapseDashboard() {
 
   const deferredTrace = useDeferredValue(trace);
   const topology = state?.topology ?? null;
-  const maskedHeads = state?.masked_heads ?? [];
+  const maskedHeads = mergeHeadMasks(
+    state?.masked_heads ?? [],
+    state?.openmetadata.defective_heads ?? [],
+  );
   const latestStep = deferredTrace?.steps.at(-1) ?? null;
   const selectedLayer = latestStep?.layers.find((layer) => layer.layer_index === selectedLayerIndex) ?? null;
   const activeTrace = deferredTrace ?? trace;
@@ -290,7 +293,7 @@ export function SynapseDashboard() {
                 icon={Sparkles}
                 label="Masked Heads"
                 value={`${maskedHeads.length}`}
-                detail={state?.openmetadata.connected ? "OM synchronized" : "Local only"}
+                detail={maskedHeads.length ? "Applied to next trace" : state?.openmetadata.connected ? "OM synchronized" : "Local only"}
               />
             </div>
           </div>
@@ -722,6 +725,11 @@ function GovernancePanel({
   onStateChange: (state: StateResponse) => void;
   appendLog: (channel: string, message: string, detail?: string) => void;
 }) {
+  const selectedLayerMaskedHeads = selectedLayer
+    ? maskedHeads
+        .filter((mask) => mask.layer_index === selectedLayer.layer_index)
+        .map((mask) => mask.head_name)
+    : [];
   const topHead = selectedLayer?.top_heads.find((head) => !head.masked) ?? selectedLayer?.top_heads[0] ?? null;
 
   async function handleMaskSelectedHead() {
@@ -789,8 +797,10 @@ function GovernancePanel({
           </p>
           <p className="mt-2 text-xs text-muted">
             {selectedLayer?.masked_head_names.length
-              ? `Masked in layer: ${selectedLayer.masked_head_names.join(", ")}`
-              : "No masked heads reported in the current layer."}
+              ? `Masked in this displayed trace: ${selectedLayer.masked_head_names.join(", ")}`
+              : selectedLayerMaskedHeads.length
+                ? `Queued for next trace in this layer: ${selectedLayerMaskedHeads.join(", ")}`
+                : "No masked heads reported in the current layer."}
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             <button
@@ -812,11 +822,19 @@ function GovernancePanel({
           </div>
           <p className="mt-3 text-xs leading-5 text-muted">
             This panel shows heads tagged as `DEFECTIVE` in OpenMetadata or local demo masks.
-            Masking appears in the next faithful trace.
+            Sync Defects pulls OpenMetadata tags into the runtime mask list; masking appears in
+            the next faithful trace.
           </p>
         </div>
 
         <div className="thin-scrollbar max-h-60 space-y-2 overflow-y-auto border border-line bg-panel2/60 p-3 font-mono text-xs text-zinc-300">
+          <div className="border border-line bg-panel/70 p-2">
+            <p className="text-zinc-100">Runtime mask list: {maskedHeads.length}</p>
+            <p className="mt-1 leading-5 text-muted">
+              A nonzero count means those heads are queued for masking on the next traced run.
+              The current trace only shows them after you run again.
+            </p>
+          </div>
           {maskedHeads.length === 0 ? (
             <p className="leading-5 text-muted">
               No heads are currently quarantined. Tag a head/layer as `DEFECTIVE` in
@@ -966,4 +984,16 @@ function clampNumber(value: number, min: number, max: number): number {
     return min;
   }
   return Math.min(max, Math.max(min, value));
+}
+
+function mergeHeadMasks(...maskGroups: Array<StateResponse["masked_heads"]>): StateResponse["masked_heads"] {
+  const merged = new Map<string, StateResponse["masked_heads"][number]>();
+  for (const group of maskGroups) {
+    for (const mask of group) {
+      merged.set(`${mask.layer_index}:${mask.head_index}`, mask);
+    }
+  }
+  return Array.from(merged.values()).sort(
+    (left, right) => left.layer_index - right.layer_index || left.head_index - right.head_index,
+  );
 }

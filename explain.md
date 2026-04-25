@@ -345,6 +345,35 @@ The mask is applied to future traced runs, not retroactively to the trace alread
 
 If the panel says "No heads are currently quarantined", that is not an error. It means OpenMetadata has no `DEFECTIVE` tag for this model/head and no local demo mask has been set.
 
+### Masked Heads Metric
+
+The header metric:
+
+```text
+Masked Heads
+1
+OM synchronized
+```
+
+means the runtime currently has one head in its mask list and OpenMetadata is reachable. It does not necessarily mean the already-visible trace was generated with that mask. Masks affect the next generation. Run another Faithful probe to see the selected layer report the masked head.
+
+There are two related states:
+
+- Runtime mask list: heads that will be masked on the next traced run.
+- Current trace masked heads: heads that were actually masked during the displayed token steps.
+
+If `Masked Heads` is `1` but the selected layer says no masked heads, usually one of these is true:
+
+- the masked head belongs to a different layer;
+- the trace on screen was generated before the mask was added;
+- the mask came from OpenMetadata after the trace completed.
+
+### What Sync Defects Does
+
+Sync Defects reads OpenMetadata for `SynapseQuarantine.DEFECTIVE` tags on layer tables or head columns. It then converts those tags into the backend runtime mask list. On the next faithful generation, the backend zeroes the matching attention-head output before projection, and the trace marks that head as masked.
+
+Sync Defects does not create tags by itself. It only imports existing governance decisions from OpenMetadata into the running model proxy.
+
 ## Example Flow
 
 Prompt:
@@ -491,3 +520,39 @@ The solution is no longer a simple implementation. It has the core pieces of an 
 - explicit evidence-quality reporting
 
 The main remaining work is to move from "this head was active" to "this head was causally necessary." That requires ablation, replay, and multi-method agreement. The current implementation now names that gap clearly and gives operators the data needed to close it.
+
+## Full Operational Autopsy Mode
+
+A fully honest black-box solution cannot mean "the system magically knows every reason for every neural computation." For modern LLMs, that claim would be fake. In this project, "full" means a stricter operational standard:
+
+1. Run the same Hugging Face model that is being traced.
+2. Capture the exact layer/head route for each generated token.
+3. Deterministically replay the same prompt.
+4. Mask a selected attention head.
+5. Compare baseline vs ablated output.
+6. Return a causal effect score and verdict.
+
+The backend exposes this as:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/api/v1/autopsy/causal \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "prompt": "Explain why masking a head can change a model response.",
+    "trace_model_name": "gpt2",
+    "max_new_tokens": 32
+  }' | jq .
+```
+
+If `layer_index` and `head_index` are omitted, the service selects the highest-attention head from the baseline trace. If they are provided, it ablates that exact head.
+
+The response includes:
+
+- baseline exact trace
+- ablated exact trace
+- selected target head
+- text similarity
+- causal effect score
+- verdict
+
+This is the point where the solution moves from visualization to causal testing. A head is no longer merely "active"; it is tested by intervention.
