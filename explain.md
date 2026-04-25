@@ -214,7 +214,7 @@ OPENMETADATA_PASSWORD=admin
 
 ## Is It Tracking The Real Black Box Right Now?
 
-With this current config:
+With the old config:
 
 ```text
 SYNAPSE_OLLAMA_MODEL=phi3:latest
@@ -230,6 +230,16 @@ The runtime evidence levels are:
 - Ollama only: real generated text, but no real internal black-box trace. Evidence is proxy/minimal.
 - Ollama + different HF shadow model: real Ollama output plus real internals from a different model. Useful for demo telemetry, but not exact for Phi-3.
 - Hugging Face faithful mode with a valid HF model: real generation and real internal trace from the same hooked model run. This is the real black-box tracking path.
+
+The local config has now been changed to:
+
+```text
+SYNAPSE_OLLAMA_MODEL=phi3:latest
+SYNAPSE_HF_MODEL_NAME=sshleifer/tiny-gpt2
+SYNAPSE_PRELOAD_SHADOW_MODEL=true
+```
+
+This gives you a real exact tracing path for the Hugging Face model. In faithful mode, generation happens inside the hooked Hugging Face model and the graph is built from actual captured attention tensors. It is not fake, but it is exact for `sshleifer/tiny-gpt2`, not for Ollama `phi3:latest`.
 
 To get real exact tracing, set `SYNAPSE_HF_MODEL_NAME` to a Hugging Face causal language model that can load locally with `output_attentions=True`. For example, a small development tracer:
 
@@ -251,11 +261,33 @@ If exact tracing matters more than speed, run with:
 "execution_mode": "faithful"
 ```
 
+Faithful mode must not fall back to Ollama. If the Hugging Face tokenizer/model is not loaded, the backend should return an error instead of producing proxy text and calling it exact.
+
 If speed matters and you accept proxy evidence, run with:
 
 ```json
 "execution_mode": "auto"
 ```
+
+## Why The Layer Visualizer Showed Only Input And Output
+
+The Synapse Visualizer draws nodes from `topology.layers`. If `topology.layers` is empty, the graph can only show:
+
+- Prompt Ingress
+- Response Egress
+
+That happened because `SYNAPSE_HF_MODEL_NAME=phi3:latest` was not loadable by Hugging Face. No tokenizer, no model object, no transformer layer inspection, and no attention hooks meant there were no real layer nodes to draw.
+
+The graph is generated like this:
+
+1. Backend loads a Hugging Face model.
+2. Backend inspects attention modules to build `ModelTopology`.
+3. Frontend receives `topology.layers` and creates one visual node per layer.
+4. During generation, backend captures each token step as `AttentionTrace.steps`.
+5. Frontend highlights the layer/head route from the latest step.
+6. OpenMetadata receives the same route as lineage when connected.
+
+If the UI says `0 layers`, it is not showing a real black-box layer graph yet. If it says `2 layers / 4 total heads` for `sshleifer/tiny-gpt2`, it is showing a real small traced model. If you switch to a larger real Hugging Face model, the visualizer will show that model's real layers and heads.
 
 ## Example Flow
 

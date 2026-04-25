@@ -61,8 +61,8 @@ export function SynapseDashboard() {
   const activeTrace = deferredTrace ?? trace;
   const predictedBackend = resolvePredictedBackend(executionMode, state?.ollama_available ?? false);
   const predictedFidelity = resolvePredictedFidelity(executionMode, state?.ollama_available ?? false);
-  const currentBackend = activeTrace?.generation_backend ?? predictedBackend;
-  const currentFidelity = activeTrace?.trace_fidelity ?? predictedFidelity;
+  const currentBackend = activeTrace?.generation_backend ?? null;
+  const currentFidelity = activeTrace?.trace_fidelity ?? null;
 
   useEffect(() => {
     void loadInitialState();
@@ -226,14 +226,14 @@ export function SynapseDashboard() {
               <MetricCard
                 icon={Orbit}
                 label="Generation Backend"
-                value={backendLabel(currentBackend)}
-                detail={executionModeLabel(executionMode)}
+                value={currentBackend ? backendLabel(currentBackend) : "Awaiting run"}
+                detail={currentBackend ? executionModeLabel(executionMode) : `Planned: ${backendLabel(predictedBackend)}`}
               />
               <MetricCard
                 icon={Radio}
                 label="Trace Fidelity"
-                value={fidelityLabel(currentFidelity)}
-                detail={activeTrace?.analysis_mode ?? predictedAnalysisMode(executionMode, state?.ollama_available ?? false)}
+                value={currentFidelity ? fidelityLabel(currentFidelity) : "Not verified"}
+                detail={activeTrace?.analysis_mode ?? `Planned: ${predictedAnalysisMode(executionMode, state?.ollama_available ?? false)}`}
               />
               <MetricCard
                 icon={ShieldAlert}

@@ -57,6 +57,7 @@ export function SynapseGraph({
 
   // Build the semantic nodes/edges then compute responsive positions based on container size.
   const { nodes: rawNodes, edges } = buildSynapseGraph(topology, trace, maskedHeads);
+  const hasRealTopology = topology.layers.length > 0;
 
   const paddingX = 28;
   const paddingY = 20;
@@ -108,12 +109,22 @@ export function SynapseGraph({
           <div>
             <p className="panel-label">Synapse Visualizer</p>
             <h2 className="mt-2 text-lg font-medium text-zinc-50">{topology.model_name}</h2>
+            <p className="mt-2 max-w-2xl text-xs leading-5 text-muted">
+              {hasRealTopology
+                ? "Generated from the loaded Hugging Face model topology plus the latest captured attention-head route."
+                : "Only prompt and response are shown because no Hugging Face layer topology is loaded yet."}
+            </p>
           </div>
           <div className="metric-mono text-right text-xs text-muted">
             <p>{topology.total_layers} layers</p>
             <p>{topology.total_heads} total heads</p>
           </div>
         </div>
+        {!hasRealTopology ? (
+          <div className="mt-3 border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs leading-5 text-amber-100">
+            Set `SYNAPSE_HF_MODEL_NAME` to a real Hugging Face model and run faithful tracing to render real layers.
+          </div>
+        ) : null}
       </div>
 
       <ReactFlow<Node<SynapseNodeData>, Edge>

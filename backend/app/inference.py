@@ -1039,24 +1039,9 @@ class NeuralInferenceEngine:
             await self._hooked_runner.ensure_loaded()
 
         tracer_ready = self._hooked_runner.is_ready()
-        use_ollama = (
-            ollama_available
-            and (
-                request.execution_mode != TraceExecutionMode.FAITHFUL
-                or not tracer_ready
-            )
-        )
+        use_ollama = request.execution_mode != TraceExecutionMode.FAITHFUL and ollama_available
 
         if use_ollama:
-            faithful_downgrade_reason: str | None = None
-            if request.execution_mode == TraceExecutionMode.FAITHFUL and not tracer_ready:
-                faithful_downgrade_reason = (
-                    "Faithful tracing was requested, but the Hugging Face tokenizer/model is not "
-                    "loaded. Falling back to Ollama generation with proxy evidence. Set "
-                    "SYNAPSE_HF_MODEL_NAME to a real Hugging Face repo id for exact tracing."
-                )
-                LOGGER.warning(faithful_downgrade_reason)
-
             shadow_request = request.model_copy(
                 update={
                     "max_new_tokens": self.settings.shadow_max_new_tokens or request.max_new_tokens,
@@ -1101,12 +1086,11 @@ class NeuralInferenceEngine:
                         analysis_mode=AnalysisMode.SHADOW,
                         trace_fidelity=TraceFidelity.PROXY,
                         prompt_token_count=1,
-                        analysis_error=faithful_downgrade_reason
-                        or "Shadow tracer unavailable or not preloaded.",
+                        analysis_error="Shadow tracer unavailable or not preloaded.",
                     )
                     match_score = None
                     final_fidelity = TraceFidelity.PROXY
-                    fidelity_reason = faithful_downgrade_reason or "No shadow HF trace was available for comparison."
+                    fidelity_reason = "No shadow HF trace was available for comparison."
                 else:
                     try:
                         trace = await shadow_task
