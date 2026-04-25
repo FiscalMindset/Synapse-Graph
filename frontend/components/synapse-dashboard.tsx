@@ -48,7 +48,10 @@ export function SynapseDashboard() {
   const [responseText, setResponseText] = useState("");
   const [trace, setTrace] = useState<AttentionTrace | null>(null);
   const [selectedLayerIndex, setSelectedLayerIndex] = useState(0);
-  const [executionMode, setExecutionMode] = useState<TraceExecutionMode>("auto");
+  const [executionMode, setExecutionMode] = useState<TraceExecutionMode>("faithful");
+  const [maxNewTokens, setMaxNewTokens] = useState(32);
+  const [temperature, setTemperature] = useState(0);
+  const [topP, setTopP] = useState(0.95);
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -115,6 +118,7 @@ export function SynapseDashboard() {
   }
 
   async function handleProbe(execMode?: TraceExecutionMode) {
+    const runMode = execMode ?? executionMode;
     setIsRunning(true);
     setError(null);
     setResponseText("");
@@ -126,12 +130,12 @@ export function SynapseDashboard() {
         {
           prompt,
           system_prompt: systemPrompt,
-          max_new_tokens: 160,
-          temperature: 0.2,
-          top_p: 0.95,
+          max_new_tokens: maxNewTokens,
+          temperature,
+          top_p: topP,
           stop: [],
           stream: true,
-          execution_mode: execMode ?? executionMode,
+          execution_mode: runMode,
         },
         {
           onSession: (event) => {
@@ -145,7 +149,7 @@ export function SynapseDashboard() {
             });
             appendLog(
               "SESSION",
-              `Session ${event.sessionId.slice(0, 8)} opened with ${event.topology.total_layers} traced layers in ${executionModeLabel(executionMode)} mode.`,
+              `Session ${event.sessionId.slice(0, 8)} opened with ${event.topology.total_layers} traced layers in ${executionModeLabel(runMode)} mode.`,
             );
           },
           onToken: (event) => {
@@ -159,7 +163,7 @@ export function SynapseDashboard() {
                   event.step,
                   prompt,
                   topology,
-                  executionMode,
+                  runMode,
                   state?.ollama_available ?? false,
                 ),
               );
@@ -205,6 +209,20 @@ export function SynapseDashboard() {
     });
     setSelectedLayerIndex(event.trace.steps.at(-1)?.layers.at(-1)?.layer_index ?? 0);
     appendLog("DONE", `Generation session ${event.sessionId.slice(0, 8)} completed.`);
+  }
+
+  function applyExactTracePreset() {
+    setExecutionMode("faithful");
+    setMaxNewTokens(32);
+    setTemperature(0);
+    setTopP(0.95);
+  }
+
+  function applyReadableAnswerPreset() {
+    setExecutionMode("auto");
+    setMaxNewTokens(160);
+    setTemperature(0.2);
+    setTopP(0.95);
   }
 
   return (
@@ -273,6 +291,84 @@ export function SynapseDashboard() {
               </div>
 
               <div className="mt-5 space-y-4">
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={applyExactTracePreset}
+                    className="rounded-sm border border-accent/35 bg-accent/8 px-3 py-3 text-left transition hover:border-accent"
+                  >
+                    <span className="metric-mono text-xs uppercase tracking-[0.22em] text-accent">
+                      Exact Trace
+                    </span>
+                    <p className="mt-2 text-xs leading-5 text-muted">
+                      Short deterministic HF run for real layer/head evidence.
+                    </p>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={applyReadableAnswerPreset}
+                    className="rounded-sm border border-line bg-panel2 px-3 py-3 text-left transition hover:border-accent/45"
+                  >
+                    <span className="metric-mono text-xs uppercase tracking-[0.22em] text-zinc-200">
+                      Readable Answer
+                    </span>
+                    <p className="mt-2 text-xs leading-5 text-muted">
+                      Longer Ollama response with proxy or shadow evidence.
+                    </p>
+                  </button>
+                </div>
+
+                <div className="border border-line bg-panel2/60 p-3">
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <label className="block">
+                      <span className="panel-label">Tokens</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={2048}
+                        value={maxNewTokens}
+                        onChange={(event) =>
+                          setMaxNewTokens(clampNumber(event.target.valueAsNumber, 1, 2048))
+                        }
+                        className="mt-2 w-full rounded-sm border border-line bg-panel px-3 py-2 text-sm text-zinc-100 outline-none focus:border-accent"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="panel-label">Temp</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={2}
+                        step={0.1}
+                        value={temperature}
+                        onChange={(event) =>
+                          setTemperature(clampNumber(event.target.valueAsNumber, 0, 2))
+                        }
+                        className="mt-2 w-full rounded-sm border border-line bg-panel px-3 py-2 text-sm text-zinc-100 outline-none focus:border-accent"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="panel-label">Top P</span>
+                      <input
+                        type="number"
+                        min={0.01}
+                        max={1}
+                        step={0.01}
+                        value={topP}
+                        onChange={(event) =>
+                          setTopP(clampNumber(event.target.valueAsNumber, 0.01, 1))
+                        }
+                        className="mt-2 w-full rounded-sm border border-line bg-panel px-3 py-2 text-sm text-zinc-100 outline-none focus:border-accent"
+                      />
+                    </label>
+                  </div>
+                  <p className="mt-3 text-xs leading-5 text-muted">
+                    {executionMode === "faithful"
+                      ? "Faithful mode traces the Hugging Face model exactly. Tiny tracer models are useful for evidence, not polished prose."
+                      : "Auto mode favors Ollama for better prose. Treat the trace as proxy unless a matching HF shadow trace is available."}
+                  </p>
+                </div>
+
                 <label className="block">
                   <span className="panel-label">System Prompt</span>
                   <textarea
@@ -745,4 +841,11 @@ function truncateText(text: string, maxLength: number): string {
     return text;
   }
   return `${text.slice(0, maxLength - 1)}…`;
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) {
+    return min;
+  }
+  return Math.min(max, Math.max(min, value));
 }

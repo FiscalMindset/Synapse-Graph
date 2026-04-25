@@ -235,13 +235,13 @@ The local config has now been changed to:
 
 ```text
 SYNAPSE_OLLAMA_MODEL=phi3:latest
-SYNAPSE_HF_MODEL_NAME=sshleifer/tiny-gpt2
+SYNAPSE_HF_MODEL_NAME=gpt2
 SYNAPSE_PRELOAD_SHADOW_MODEL=true
 ```
 
-This gives you a real exact tracing path for the Hugging Face model. In faithful mode, generation happens inside the hooked Hugging Face model and the graph is built from actual captured attention tensors. It is not fake, but it is exact for `sshleifer/tiny-gpt2`, not for Ollama `phi3:latest`.
+This gives you a real exact tracing path for the Hugging Face model. In faithful mode, generation happens inside the hooked Hugging Face model and the graph is built from actual captured attention tensors. It is not fake, but it is exact for `gpt2`, not for Ollama `phi3:latest`. GPT-2 has 12 transformer layers and 144 total attention heads, which is likely the larger number you saw earlier.
 
-To get real exact tracing, set `SYNAPSE_HF_MODEL_NAME` to a Hugging Face causal language model that can load locally with `output_attentions=True`. For example, a small development tracer:
+To get real exact tracing, set `SYNAPSE_HF_MODEL_NAME` to a Hugging Face causal language model that can load locally with `output_attentions=True`. For example:
 
 ```bash
 SYNAPSE_HF_MODEL_NAME=gpt2
@@ -287,7 +287,18 @@ The graph is generated like this:
 5. Frontend highlights the layer/head route from the latest step.
 6. OpenMetadata receives the same route as lineage when connected.
 
-If the UI says `0 layers`, it is not showing a real black-box layer graph yet. If it says `2 layers / 4 total heads` for `sshleifer/tiny-gpt2`, it is showing a real small traced model. If you switch to a larger real Hugging Face model, the visualizer will show that model's real layers and heads.
+If the UI says `0 layers`, it is not showing a real black-box layer graph yet. If it says `12 layers / 144 total heads` for `gpt2`, it is showing a real traced GPT-2 model. If you switch to another real Hugging Face model, the visualizer will show that model's real layers and heads.
+
+## Why Faithful Output Can Look Strange
+
+Faithful mode uses the traced Hugging Face model as the generator. That is necessary for exact token-level evidence, because the output and the internal activations must come from the same forward passes. GPT-2 is real and traceable, but it is not an instruction-tuned assistant model. If you ask it to explain a system design, it may continue text in a strange completion style.
+
+The probe console now separates the two goals:
+
+- Exact Trace: short deterministic Hugging Face generation for real layer/head evidence.
+- Readable Answer: longer Ollama generation for better prose, with proxy or shadow evidence.
+
+Use Exact Trace when you care about real internals. Use Readable Answer when you care about natural language quality.
 
 ## Example Flow
 
