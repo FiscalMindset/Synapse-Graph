@@ -1,7 +1,7 @@
 "use client";
 
 import { startTransition, useDeferredValue, useEffect, useState } from "react";
-import { Activity, Orbit, Radio, ShieldAlert } from "lucide-react";
+import { Orbit, Radio, ShieldAlert, Sparkles } from "lucide-react";
 
 import { ActivationChart } from "@/components/activation-chart";
 import { ConsoleLog } from "@/components/console-log";
@@ -14,11 +14,30 @@ import type {
   ModelTopology,
   StateResponse,
   StreamDoneEvent,
+  TraceExecutionMode,
+  TraceFidelity,
   TokenStepCapture,
 } from "@/lib/types";
 
 const DEFAULT_PROMPT =
   "Trace the attention route you would use to explain why masking a single head can change a model's response.";
+
+const EXECUTION_MODE_OPTIONS: Array<{
+  value: TraceExecutionMode;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "auto",
+    label: "Auto",
+    description: "Prefer Ollama when it is available, otherwise fall back to exact inline tracing.",
+  },
+  {
+    value: "faithful",
+    label: "Faithful",
+    description: "Generate inside the traced Hugging Face model for exact causal evidence.",
+  },
+];
 
 export function SynapseDashboard() {
   const [state, setState] = useState<StateResponse | null>(null);
@@ -29,6 +48,7 @@ export function SynapseDashboard() {
   const [responseText, setResponseText] = useState("");
   const [trace, setTrace] = useState<AttentionTrace | null>(null);
   const [selectedLayerIndex, setSelectedLayerIndex] = useState(0);
+  const [executionMode, setExecutionMode] = useState<TraceExecutionMode>("faithful");
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -38,6 +58,11 @@ export function SynapseDashboard() {
   const maskedHeads = state?.masked_heads ?? [];
   const latestStep = deferredTrace?.steps.at(-1) ?? null;
   const selectedLayer = latestStep?.layers.find((layer) => layer.layer_index === selectedLayerIndex) ?? null;
+  const activeTrace = deferredTrace ?? trace;
+  const predictedBackend = resolvePredictedBackend(executionMode, state?.ollama_available ?? false);
+  const predictedFidelity = resolvePredictedFidelity(executionMode, state?.ollama_available ?? false);
+  const currentBackend = activeTrace?.generation_backend ?? predictedBackend;
+  const currentFidelity = activeTrace?.trace_fidelity ?? predictedFidelity;
 
   useEffect(() => {
     void loadInitialState();
@@ -106,6 +131,7 @@ export function SynapseDashboard() {
           top_p: 0.95,
           stop: [],
           stream: true,
+          execution_mode: executionMode,
         },
         {
           onSession: (event) => {
@@ -119,7 +145,7 @@ export function SynapseDashboard() {
             });
             appendLog(
               "SESSION",
-              `Session ${event.sessionId.slice(0, 8)} opened with ${event.topology.total_layers} traced layers.`,
+              `Session ${event.sessionId.slice(0, 8)} opened with ${event.topology.total_layers} traced layers in ${executionModeLabel(executionMode)} mode.`,
             );
           },
           onToken: (event) => {
@@ -127,7 +153,16 @@ export function SynapseDashboard() {
           },
           onTraceStep: (event) => {
             startTransition(() => {
-              setTrace((current) => upsertTrace(current, event.step, prompt, topology));
+              setTrace((current) =>
+                upsertTrace(
+                  current,
+                  event.step,
+                  prompt,
+                  topology,
+                  executionMode,
+                  state?.ollama_available ?? false,
+                ),
+              );
             });
             setSelectedLayerIndex(event.step.layers.at(-1)?.layer_index ?? 0);
             appendLog(
@@ -183,34 +218,38 @@ export function SynapseDashboard() {
                 Neural lineage, governance, and live head quarantine in one control room.
               </h1>
               <p className="mt-3 max-w-3xl text-sm leading-6 text-muted">
-                Local Ollama generation stays in the driver seat while an instrumented PyTorch
-                shadow model emits per-head attention telemetry into OpenMetadata.
+                Switch between fast shadow tracing and faithful inline tracing so the same dashboard
+                can show either low-latency operator telemetry or exact token-level evidence.
               </p>
             </div>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <MetricCard
                 icon={Orbit}
                 label="Generation Backend"
-                value={state?.ollama_available ? "Ollama live" : "HF fallback"}
-                detail={topology?.device ?? "Awaiting topology"}
+                value={backendLabel(currentBackend)}
+                detail={executionModeLabel(executionMode)}
               />
               <MetricCard
                 icon={Radio}
-                label="Lineage Depth"
-                value={`${latestStep?.high_activation_path.length ?? 0} active hops`}
-                detail={trace?.analysis_mode ?? "No trace"}
+                label="Trace Fidelity"
+                value={fidelityLabel(currentFidelity)}
+                detail={activeTrace?.analysis_mode ?? predictedAnalysisMode(executionMode, state?.ollama_available ?? false)}
               />
               <MetricCard
                 icon={ShieldAlert}
+                label="Lineage Depth"
+                value={`${latestStep?.high_activation_path.length ?? 0} active hops`}
+                detail={
+                  latestStep?.explanation
+                    ? truncateText(latestStep.explanation, 96)
+                    : "No step evidence yet"
+                }
+              />
+              <MetricCard
+                icon={Sparkles}
                 label="Masked Heads"
                 value={`${maskedHeads.length}`}
                 detail={state?.openmetadata.connected ? "OM synchronized" : "Local only"}
-              />
-              <MetricCard
-                icon={Activity}
-                label="Response Tokens"
-                value={`${responseText.length}`}
-                detail={isRunning ? "Streaming" : "Idle"}
               />
             </div>
           </div>
@@ -252,6 +291,38 @@ export function SynapseDashboard() {
                   />
                 </label>
 
+                <div>
+                  <span className="panel-label">Execution Mode</span>
+                  <div className="mt-2 grid gap-2">
+                    {EXECUTION_MODE_OPTIONS.map((option) => {
+                      const isSelected = executionMode === option.value;
+
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => setExecutionMode(option.value)}
+                          className={`rounded-sm border px-3 py-3 text-left transition ${
+                            isSelected
+                              ? "border-accent bg-accent/10 text-zinc-50"
+                              : "border-line bg-panel2 text-zinc-200 hover:border-accent/45"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="metric-mono text-xs uppercase tracking-[0.22em]">
+                              {option.label}
+                            </span>
+                            <span className="text-[11px] text-muted">
+                              {modeRuntimeHint(option.value, state?.ollama_available ?? false)}
+                            </span>
+                          </div>
+                          <p className="mt-2 text-xs leading-5 text-muted">{option.description}</p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
                 <div className="flex items-center gap-3">
                   <button
                     type="button"
@@ -283,6 +354,8 @@ export function SynapseDashboard() {
 
           <section className="space-y-5">
             <ActivationChart layer={selectedLayer} />
+
+            <ExplainabilityPanel trace={activeTrace} latestStep={latestStep} />
 
             <ResponsePanel responseText={responseText} latestStep={latestStep} error={error} />
 
@@ -353,7 +426,7 @@ function ResponsePanel({
           <h3 className="mt-2 text-lg font-medium text-zinc-50">Generation output</h3>
         </div>
         <div className="metric-mono text-right text-xs text-muted">
-          <p>{latestStep ? `step ${latestStep.step_index}` : "No trace"}</p>
+          <p>{latestStep ? `step ${latestStep.step_index + 1}` : "No trace"}</p>
           <p>{latestStep ? `${latestStep.prompt_plus_generation_length} total tokens` : "Awaiting run"}</p>
         </div>
       </div>
@@ -361,6 +434,83 @@ function ResponsePanel({
         {responseText || "No response yet. Fire a probe to stream tokens here."}
       </div>
       {error ? <p className="mt-3 text-sm text-rose-400">{error}</p> : null}
+    </div>
+  );
+}
+
+function ExplainabilityPanel({
+  trace,
+  latestStep,
+}: {
+  trace: AttentionTrace | null;
+  latestStep: TokenStepCapture | null;
+}) {
+  const summary = trace?.summary ?? null;
+
+  return (
+    <div className="panel-shell rounded-sm p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="panel-label">Glassbox Summary</p>
+          <h3 className="mt-2 text-lg font-medium text-zinc-50">Why the model responded this way</h3>
+        </div>
+        <div className="metric-mono text-right text-xs text-muted">
+          <p>{trace ? fidelityLabel(trace.trace_fidelity) : "Awaiting run"}</p>
+          <p>{trace?.analysis_mode ?? "No analysis mode yet"}</p>
+        </div>
+      </div>
+
+      <div className="mt-4 space-y-3">
+        <div className="border border-line bg-panel2/70 p-3">
+          <p className="text-sm leading-6 text-zinc-100">
+            {summary?.explanation ??
+              latestStep?.explanation ??
+              "Run a probe to see the dominant layers, heads, and source tokens behind the output."}
+          </p>
+        </div>
+
+        <ChipGroup
+          label="Dominant Heads"
+          items={summary?.dominant_heads ?? latestStep?.high_activation_path ?? []}
+          emptyLabel="No dominant heads captured yet."
+        />
+
+        <ChipGroup
+          label="Influential Tokens"
+          items={summary?.influential_tokens ?? latestStep?.evidence_tokens ?? []}
+          emptyLabel="No evidence tokens captured yet."
+        />
+      </div>
+    </div>
+  );
+}
+
+function ChipGroup({
+  label,
+  items,
+  emptyLabel,
+}: {
+  label: string;
+  items: string[];
+  emptyLabel: string;
+}) {
+  return (
+    <div className="border border-line bg-panel2/60 p-3">
+      <p className="panel-label">{label}</p>
+      {items.length ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {items.map((item) => (
+            <span
+              key={`${label}-${item}`}
+              className="metric-mono border border-accent/25 bg-accent/8 px-2 py-1 text-[11px] text-accent"
+            >
+              {item}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-2 text-xs text-muted">{emptyLabel}</p>
+      )}
     </div>
   );
 }
@@ -434,23 +584,31 @@ function upsertTrace(
   step: TokenStepCapture,
   prompt: string,
   topology: ModelTopology | null,
+  executionMode: TraceExecutionMode,
+  ollamaAvailable: boolean,
 ): AttentionTrace {
   if (!currentTrace) {
     return {
       source_prompt: prompt,
       generation_model: topology?.model_name ?? "local-model",
-      analysis_model: topology?.model_name ?? "local-model",
-      generation_backend: "huggingface",
-      analysis_mode: "shadow",
-      prompt_token_count: 0,
-      generated_text: "",
+      generation_backend: resolvePredictedBackend(executionMode, ollamaAvailable),
+      analysis_model:
+        executionMode === "faithful" || !ollamaAvailable
+          ? topology?.model_name ?? "local-model"
+          : "shadow-model",
+      analysis_mode: resolvePredictedAnalysisMode(executionMode, ollamaAvailable),
+      trace_fidelity: resolvePredictedFidelity(executionMode, ollamaAvailable),
+      prompt_token_count: 1,
+      generated_text: step.generated_token,
       analysis_error: null,
+      summary: null,
       steps: [step],
     };
   }
 
   return {
     ...currentTrace,
+    generated_text: `${currentTrace.generated_text}${step.generated_token}`,
     steps: [...currentTrace.steps, step],
   };
 }
@@ -470,4 +628,77 @@ function emptyState(topology: ModelTopology | null): StateResponse {
       last_ingest_error: null,
     },
   };
+}
+
+function resolvePredictedBackend(
+  executionMode: TraceExecutionMode,
+  ollamaAvailable: boolean,
+): AttentionTrace["generation_backend"] {
+  if (executionMode === "faithful" || !ollamaAvailable) {
+    return "huggingface";
+  }
+  return "ollama";
+}
+
+function resolvePredictedAnalysisMode(
+  executionMode: TraceExecutionMode,
+  ollamaAvailable: boolean,
+): AttentionTrace["analysis_mode"] {
+  if (executionMode === "faithful" || !ollamaAvailable) {
+    return "inline";
+  }
+  return "shadow";
+}
+
+function resolvePredictedFidelity(
+  executionMode: TraceExecutionMode,
+  ollamaAvailable: boolean,
+): TraceFidelity {
+  if (executionMode === "faithful" || !ollamaAvailable) {
+    return "exact";
+  }
+  return "proxy";
+}
+
+function predictedAnalysisMode(
+  executionMode: TraceExecutionMode,
+  ollamaAvailable: boolean,
+): string {
+  return resolvePredictedAnalysisMode(executionMode, ollamaAvailable);
+}
+
+function backendLabel(backend: AttentionTrace["generation_backend"]): string {
+  return backend === "ollama" ? "Ollama live" : "HF inline";
+}
+
+function fidelityLabel(fidelity: TraceFidelity): string {
+  return fidelity === "exact" ? "Exact evidence" : "Proxy evidence";
+}
+
+function executionModeLabel(mode: TraceExecutionMode): string {
+  switch (mode) {
+    case "faithful":
+      return "Faithful glassbox";
+    case "fast":
+      return "Fast shadow trace";
+    default:
+      return "Auto orchestration";
+  }
+}
+
+function modeRuntimeHint(mode: TraceExecutionMode, ollamaAvailable: boolean): string {
+  if (mode === "faithful") {
+    return "Always exact";
+  }
+  if (ollamaAvailable) {
+    return mode === "fast" ? "Ollama + shadow" : "Ollama preferred";
+  }
+  return "HF fallback";
+}
+
+function truncateText(text: string, maxLength: number): string {
+  if (text.length <= maxLength) {
+    return text;
+  }
+  return `${text.slice(0, maxLength - 1)}…`;
 }

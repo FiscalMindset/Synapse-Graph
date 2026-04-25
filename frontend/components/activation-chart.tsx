@@ -23,6 +23,9 @@ export function ActivationChart({ layer }: ActivationChartProps) {
       name: head.head_name,
       score: Number(head.max_attention_score.toFixed(3)),
       masked: head.masked,
+      mean: Number(head.mean_attention_score.toFixed(3)),
+      l2: Number(head.l2_norm.toFixed(3)),
+      topSourceTokens: head.top_source_tokens,
     })) ?? [];
 
   return (
@@ -39,6 +42,19 @@ export function ActivationChart({ layer }: ActivationChartProps) {
           <p>{layer ? `${layer.sequence_length} context` : "Awaiting trace"}</p>
         </div>
       </div>
+
+      {layer?.dominant_source_tokens.length ? (
+        <div className="mt-4 flex flex-wrap gap-2">
+          {layer.dominant_source_tokens.map((token) => (
+            <span
+              key={token}
+              className="metric-mono border border-accent/20 bg-accent/8 px-2 py-1 text-[11px] text-accent"
+            >
+              {token}
+            </span>
+          ))}
+        </div>
+      ) : null}
 
       <div className="mt-5 h-64">
         {data.length === 0 ? (
@@ -62,12 +78,42 @@ export function ActivationChart({ layer }: ActivationChartProps) {
               />
               <Tooltip
                 cursor={{ fill: "rgba(57,255,20,0.05)" }}
-                contentStyle={{
-                  borderRadius: 2,
-                  border: "1px solid #26282d",
-                  background: "#0f1113",
-                  color: "#fafafa",
-                  fontFamily: "var(--font-mono)",
+                content={({ active, payload }) => {
+                  if (!active || !payload?.length) {
+                    return null;
+                  }
+
+                  const datum = payload[0]?.payload as
+                    | {
+                        name: string;
+                        score: number;
+                        masked: boolean;
+                        mean: number;
+                        l2: number;
+                        topSourceTokens: string[];
+                      }
+                    | undefined;
+
+                  if (!datum) {
+                    return null;
+                  }
+
+                  return (
+                    <div className="max-w-[220px] border border-line bg-[#0f1113] p-3 font-mono text-[11px] text-zinc-100 shadow-panel">
+                      <p className="text-accent">{datum.name}</p>
+                      <p className="mt-2 text-muted">max {datum.score}</p>
+                      <p className="text-muted">mean {datum.mean}</p>
+                      <p className="text-muted">l2 {datum.l2}</p>
+                      <p className="mt-2 text-muted">
+                        {datum.masked ? "Masked by governance" : "Live in current trace"}
+                      </p>
+                      {datum.topSourceTokens.length ? (
+                        <p className="mt-2 text-zinc-200">
+                          Source tokens: {datum.topSourceTokens.slice(0, 4).join(", ")}
+                        </p>
+                      ) : null}
+                    </div>
+                  );
                 }}
               />
               <Bar dataKey="score" radius={0}>

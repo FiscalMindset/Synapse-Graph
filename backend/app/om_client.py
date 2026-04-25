@@ -739,12 +739,18 @@ def _build_synthetic_sql(
     target_name: str,
 ) -> str:
     prompt_preview = prompt.replace("\n", " ")[:160]
+    activation_path = " -> ".join(step.high_activation_path[:6]) or "n/a"
+    evidence_tokens = ", ".join(step.evidence_tokens[:6]) or "n/a"
+    explanation = (step.explanation or "n/a").replace("\n", " ")[:220]
     return (
         f"-- Synapse-Graph synthetic lineage\n"
         f"-- session={session_id}\n"
         f"-- step={step.step_index}\n"
         f"-- target={target_name}\n"
         f"-- prompt={prompt_preview}\n"
+        f"-- path={activation_path}\n"
+        f"-- evidence_tokens={evidence_tokens}\n"
+        f"-- explanation={explanation}\n"
         f"SELECT neural_signal FROM previous_state INTO {target_name};"
     )
 

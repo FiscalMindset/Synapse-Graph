@@ -1,5 +1,7 @@
 export type GenerationBackend = "ollama" | "huggingface";
 export type AnalysisMode = "inline" | "shadow";
+export type TraceExecutionMode = "auto" | "fast" | "faithful";
+export type TraceFidelity = "exact" | "proxy";
 
 export interface HeadMask {
   layer_index: number;
@@ -17,6 +19,7 @@ export interface HeadActivation {
   mean_attention_score: number;
   l2_norm: number;
   top_source_positions: number[];
+  top_source_tokens: string[];
   raw_last_token_attention: number[];
 }
 
@@ -26,6 +29,7 @@ export interface LayerActivation {
   sequence_length: number;
   head_count: number;
   masked_head_names: string[];
+  dominant_source_tokens: string[];
   top_heads: HeadActivation[];
   full_last_token_attention_matrix?: number[][] | null;
 }
@@ -38,6 +42,16 @@ export interface TokenStepCapture {
   masked_heads: string[];
   layers: LayerActivation[];
   high_activation_path: string[];
+  evidence_tokens: string[];
+  explanation?: string | null;
+}
+
+export interface TraceSummary {
+  explanation: string;
+  dominant_layers: string[];
+  dominant_heads: string[];
+  influential_tokens: string[];
+  masked_heads_applied: string[];
 }
 
 export interface AttentionTrace {
@@ -46,9 +60,11 @@ export interface AttentionTrace {
   analysis_model: string;
   generation_backend: GenerationBackend;
   analysis_mode: AnalysisMode;
+  trace_fidelity: TraceFidelity;
   prompt_token_count: number;
   generated_text: string;
   analysis_error?: string | null;
+  summary?: TraceSummary | null;
   steps: TokenStepCapture[];
 }
 
@@ -101,6 +117,7 @@ export interface GeneratePayload {
   top_p: number;
   stop: string[];
   stream: boolean;
+  execution_mode: TraceExecutionMode;
 }
 
 export interface StreamSessionEvent {

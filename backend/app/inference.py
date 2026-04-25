@@ -5,6 +5,7 @@ import inspect
 import json
 import logging
 import re
+from collections import Counter
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
 from enum import StrEnum
@@ -37,6 +38,17 @@ class AnalysisMode(StrEnum):
     SHADOW = "shadow"
 
 
+class TraceExecutionMode(StrEnum):
+    AUTO = "auto"
+    FAST = "fast"
+    FAITHFUL = "faithful"
+
+
+class TraceFidelity(StrEnum):
+    EXACT = "exact"
+    PROXY = "proxy"
+
+
 class GenerationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -47,6 +59,7 @@ class GenerationRequest(BaseModel):
     top_p: float = Field(default=0.95, gt=0.0, le=1.0)
     stop: list[str] = Field(default_factory=list)
     stream: bool = True
+    execution_mode: TraceExecutionMode = TraceExecutionMode.AUTO
 
 
 class HeadMask(BaseModel):
@@ -88,6 +101,7 @@ class HeadActivation(BaseModel):
     mean_attention_score: float
     l2_norm: float
     top_source_positions: list[int] = Field(default_factory=list)
+    top_source_tokens: list[str] = Field(default_factory=list)
     raw_last_token_attention: list[float] = Field(default_factory=list)
 
 
@@ -99,6 +113,7 @@ class LayerActivation(BaseModel):
     sequence_length: int = Field(ge=1)
     head_count: int = Field(ge=1)
     masked_head_names: list[str] = Field(default_factory=list)
+    dominant_source_tokens: list[str] = Field(default_factory=list)
     top_heads: list[HeadActivation] = Field(default_factory=list)
     full_last_token_attention_matrix: list[list[float]] | None = None
 
@@ -113,6 +128,18 @@ class TokenStepCapture(BaseModel):
     masked_heads: list[str] = Field(default_factory=list)
     layers: list[LayerActivation] = Field(default_factory=list)
     high_activation_path: list[str] = Field(default_factory=list)
+    evidence_tokens: list[str] = Field(default_factory=list)
+    explanation: str | None = None
+
+
+class TraceSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    explanation: str
+    dominant_layers: list[str] = Field(default_factory=list)
+    dominant_heads: list[str] = Field(default_factory=list)
+    influential_tokens: list[str] = Field(default_factory=list)
+    masked_heads_applied: list[str] = Field(default_factory=list)
 
 
 class AttentionTrace(BaseModel):
@@ -123,9 +150,11 @@ class AttentionTrace(BaseModel):
     analysis_model: str
     generation_backend: GenerationBackend
     analysis_mode: AnalysisMode
+    trace_fidelity: TraceFidelity
     prompt_token_count: int = Field(ge=1)
     generated_text: str = ""
     analysis_error: str | None = None
+    summary: TraceSummary | None = None
     steps: list[TokenStepCapture] = Field(default_factory=list)
 
 
@@ -374,6 +403,7 @@ class HookedTransformerRunner:
             analysis_model=self._settings.hf_model_name,
             generation_backend=GenerationBackend.HUGGINGFACE,
             analysis_mode=analysis_mode,
+            trace_fidelity=TraceFidelity.EXACT,
             prompt_token_count=prompt_token_count,
         )
 
@@ -416,6 +446,11 @@ class HookedTransformerRunner:
                         generated_token=token_text,
                         generated_token_id=next_token_id,
                         prompt_plus_generation_length=prompt_token_count + step_index + 1,
+                        context_tokens=_format_token_window(
+                            tokenizer,
+                            input_ids[0].detach().to(device="cpu").tolist(),
+                            self._settings.capture_context_window,
+                        ),
                     )
                     trace.steps.append(step_capture)
 
@@ -449,6 +484,7 @@ class HookedTransformerRunner:
                     if is_eos or _matches_any_stop_sequence("".join(generated_text_parts), request.stop):
                         break
 
+                trace = trace.model_copy(update={"summary": self._summarize_trace(trace)})
                 yield GenerationChunk(
                     backend=GenerationBackend.HUGGINGFACE,
                     model=self._settings.hf_model_name,
@@ -690,6 +726,7 @@ class HookedTransformerRunner:
         generated_token: str,
         generated_token_id: int,
         prompt_plus_generation_length: int,
+        context_tokens: list[str],
     ) -> TokenStepCapture:
         if self._active_trace_session is None:
             raise RuntimeError("The active trace session was unexpectedly missing while building a step.")
@@ -702,6 +739,7 @@ class HookedTransformerRunner:
             layer_capture = self._summarize_layer(
                 layer_index,
                 head_matrix,
+                context_tokens,
                 self._active_trace_session.masked_heads_by_layer.get(layer_index, set()),
             )
             layers.append(layer_capture)
@@ -712,6 +750,17 @@ class HookedTransformerRunner:
             if top_head.max_attention_score >= self._settings.capture_activation_threshold:
                 high_activation_path.append(f"{layer_capture.layer_name}:{top_head.head_name}")
 
+        ranked_layers = sorted(
+            (layer for layer in layers if layer.top_heads),
+            key=lambda layer: layer.top_heads[0].max_attention_score,
+            reverse=True,
+        )
+        evidence_tokens = _dedupe_tokens(
+            token
+            for layer in ranked_layers[:3]
+            for token in layer.dominant_source_tokens
+        )[:6]
+
         return TokenStepCapture(
             step_index=step_index,
             generated_token=generated_token,
@@ -720,12 +769,20 @@ class HookedTransformerRunner:
             masked_heads=masked_head_names,
             layers=layers,
             high_activation_path=high_activation_path,
+            evidence_tokens=evidence_tokens,
+            explanation=_build_step_explanation(
+                generated_token=generated_token,
+                ranked_layers=ranked_layers,
+                evidence_tokens=evidence_tokens,
+                masked_head_names=masked_head_names,
+            ),
         )
 
     def _summarize_layer(
         self,
         layer_index: int,
         head_matrix: Tensor,
+        context_tokens: list[str],
         masked_heads: set[int],
     ) -> LayerActivation:
         head_count, sequence_length = head_matrix.shape
@@ -744,6 +801,12 @@ class HookedTransformerRunner:
                     mean_attention_score=float(head_vector.mean().item()),
                     l2_norm=float(torch.linalg.vector_norm(head_vector).item()),
                     top_source_positions=[int(position) for position in top_positions],
+                    top_source_tokens=[
+                        context_tokens[position]
+                        if 0 <= position < len(context_tokens)
+                        else f"pos:{position}"
+                        for position in top_positions
+                    ],
                     raw_last_token_attention=head_vector.tolist(),
                 )
             )
@@ -754,6 +817,7 @@ class HookedTransformerRunner:
         )
 
         layer_matrix = head_matrix.tolist() if self._settings.capture_full_attention_matrix else None
+        top_heads = summaries[: self._settings.capture_top_k_heads]
 
         return LayerActivation(
             layer_index=layer_index,
@@ -761,8 +825,47 @@ class HookedTransformerRunner:
             sequence_length=sequence_length,
             head_count=head_count,
             masked_head_names=[f"Head_{head_index + 1}" for head_index in sorted(masked_heads)],
-            top_heads=summaries[: self._settings.capture_top_k_heads],
+            dominant_source_tokens=_dedupe_tokens(
+                token
+                for head in top_heads[:3]
+                for token in head.top_source_tokens
+            )[:5],
+            top_heads=top_heads,
             full_last_token_attention_matrix=layer_matrix,
+        )
+
+    def _summarize_trace(self, trace: AttentionTrace) -> TraceSummary:
+        layer_counter: Counter[str] = Counter()
+        head_counter: Counter[str] = Counter()
+        token_counter: Counter[str] = Counter()
+
+        for step in trace.steps:
+            for path_entry in step.high_activation_path:
+                if ":" not in path_entry:
+                    continue
+                layer_name, head_name = path_entry.split(":", 1)
+                layer_counter[layer_name] += 1
+                head_counter[f"{layer_name}:{head_name}"] += 1
+            for token in step.evidence_tokens:
+                if _is_informative_token(token):
+                    token_counter[token] += 1
+
+        dominant_layers = [name for name, _ in layer_counter.most_common(4)]
+        dominant_heads = [name for name, _ in head_counter.most_common(5)]
+        influential_tokens = [token for token, _ in token_counter.most_common(6)]
+        masked_heads_applied = trace.steps[-1].masked_heads if trace.steps else []
+
+        return TraceSummary(
+            explanation=_build_trace_summary_explanation(
+                trace.trace_fidelity,
+                dominant_heads,
+                influential_tokens,
+                masked_heads_applied,
+            ),
+            dominant_layers=dominant_layers,
+            dominant_heads=dominant_heads,
+            influential_tokens=influential_tokens,
+            masked_heads_applied=masked_heads_applied,
         )
 
     def _render_prompt(self, prompt: str, system_prompt: str | None) -> str:
@@ -864,8 +967,9 @@ class NeuralInferenceEngine:
         step_listener: StepListener | None = None,
     ) -> AsyncIterator[GenerationChunk]:
         ollama_available = self.settings.use_ollama_if_available and await self._ollama.is_available()
+        use_ollama = request.execution_mode != TraceExecutionMode.FAITHFUL and ollama_available
 
-        if ollama_available:
+        if use_ollama:
             shadow_request = request.model_copy(
                 update={
                     "max_new_tokens": self.settings.shadow_max_new_tokens or request.max_new_tokens,
@@ -893,16 +997,31 @@ class NeuralInferenceEngine:
                         analysis_model=self.settings.hf_model_name,
                         generation_backend=GenerationBackend.OLLAMA,
                         analysis_mode=AnalysisMode.SHADOW,
+                        trace_fidelity=TraceFidelity.PROXY,
                         prompt_token_count=1,
                         analysis_error=str(exc),
                     )
                 else:
+                    summary = trace.summary
+                    if summary is not None:
+                        summary = summary.model_copy(
+                            update={
+                                "explanation": _build_trace_summary_explanation(
+                                    TraceFidelity.PROXY,
+                                    summary.dominant_heads,
+                                    summary.influential_tokens,
+                                    summary.masked_heads_applied,
+                                )
+                            }
+                        )
                     trace = trace.model_copy(
                         update={
                             "generation_model": self.settings.ollama_model,
                             "analysis_model": self.settings.hf_model_name,
                             "generation_backend": GenerationBackend.OLLAMA,
                             "analysis_mode": AnalysisMode.SHADOW,
+                            "trace_fidelity": TraceFidelity.PROXY,
+                            "summary": summary,
                         }
                     )
 
@@ -1037,3 +1156,119 @@ def _format_mask_names(masked_heads_by_layer: dict[int, set[int]]) -> list[str]:
         for head_index in sorted(head_indices):
             formatted.append(f"Layer_{layer_index + 1}:Head_{head_index + 1}")
     return formatted
+
+
+def _format_token_window(
+    tokenizer: PreTrainedTokenizerBase,
+    token_ids: list[int],
+    context_window: int,
+) -> list[str]:
+    window_ids = token_ids[-context_window:]
+    raw_tokens = tokenizer.convert_ids_to_tokens(window_ids, skip_special_tokens=False)
+    return [_normalize_display_token(token) for token in raw_tokens]
+
+
+def _normalize_display_token(token: str) -> str:
+    cleaned = (
+        token.replace("Ġ", " ")
+        .replace("▁", " ")
+        .replace("Ċ", "\\n")
+        .replace("ĉ", "\\t")
+    )
+    if cleaned == "":
+        return "<empty>"
+    if cleaned.isspace():
+        return "<space>"
+    return cleaned
+
+
+def _dedupe_tokens(tokens: Any) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for raw_token in tokens:
+        token = str(raw_token)
+        if not _is_informative_token(token) or token in seen:
+            continue
+        seen.add(token)
+        deduped.append(token)
+    return deduped
+
+
+def _is_informative_token(token: str) -> bool:
+    normalized = token.strip()
+    if not normalized:
+        return False
+    if normalized in {"<space>", "<empty>", "\\n", "\\t"}:
+        return False
+    return True
+
+
+def _quote_token(token: str) -> str:
+    compact = token.replace("\n", "\\n")
+    return f'"{compact}"'
+
+
+def _build_step_explanation(
+    *,
+    generated_token: str,
+    ranked_layers: list[LayerActivation],
+    evidence_tokens: list[str],
+    masked_head_names: list[str],
+) -> str | None:
+    if not ranked_layers:
+        return None
+
+    top_routes: list[str] = []
+    for layer in ranked_layers[:2]:
+        if not layer.top_heads:
+            continue
+        head = layer.top_heads[0]
+        route = f"{layer.layer_name}/{head.head_name}"
+        if head.top_source_tokens:
+            route += " attending to " + ", ".join(_quote_token(token) for token in head.top_source_tokens[:2])
+        top_routes.append(route)
+
+    if not top_routes:
+        return None
+
+    generated_label = _quote_token(generated_token) if generated_token else "the next token"
+    explanation_parts = [
+        f"{generated_label} was driven most strongly by " + " and ".join(top_routes) + "."
+    ]
+    if evidence_tokens:
+        explanation_parts.append(
+            "Key evidence tokens were "
+            + ", ".join(_quote_token(token) for token in evidence_tokens[:4])
+            + "."
+        )
+    if masked_head_names:
+        explanation_parts.append(f"{len(masked_head_names)} masked heads constrained this step.")
+    return " ".join(explanation_parts)
+
+
+def _build_trace_summary_explanation(
+    fidelity: TraceFidelity,
+    dominant_heads: list[str],
+    influential_tokens: list[str],
+    masked_heads_applied: list[str],
+) -> str:
+    explanation_parts = [
+        "This run is grounded in exact inline tracing."
+        if fidelity == TraceFidelity.EXACT
+        else "This run uses proxy tracing from the shadow model, so treat it as strong evidence rather than exact causality."
+    ]
+    if dominant_heads:
+        explanation_parts.append(
+            "The dominant neural route repeatedly passed through "
+            + ", ".join(dominant_heads[:3])
+            + "."
+        )
+    if influential_tokens:
+        explanation_parts.append(
+            "The model concentrated most on "
+            + ", ".join(_quote_token(token) for token in influential_tokens[:5])
+            + "."
+        )
+    if masked_heads_applied:
+        explanation_parts.append(f"{len(masked_heads_applied)} masked heads were enforced during the run.")
+    return " ".join(explanation_parts)
