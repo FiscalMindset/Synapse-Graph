@@ -1,176 +1,70 @@
-# Synapse-Graph
+# Synapse-Graph (AI Autopsy Engine)
 
-**Synapse-Graph** is an "LLM Glassbox" for local models. It turns a running transformer into a governed lineage graph by capturing live attention-head activity, translating that activity into OpenMetadata entities, and letting operators quarantine defective heads from a metadata control plane.
+<div align="center">
 
-This project is built as a full-stack system:
+**Turn LLM internals into observable, governable infrastructure**
 
-- A **FastAPI neural proxy** sits between the user, a local LLM, and OpenMetadata.
-- A **PyTorch/Hugging Face shadow tracer** hooks attention modules and extracts per-layer, per-head activations in real time.
-- A **Next.js dashboard** visualizes the active neural path, streaming outputs, masked heads, and OpenMetadata sync state.
+[![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-Live-blue?style=for-the-badge)](https://fiscalmindset.github.io/Synapse-Graph/)
+[![YouTube Demo](https://img.shields.io/badge/YouTube-Demo-red?style=for-the-badge)](https://youtu.be/idOJYh6TUC8)
+[![YouTube Product](https://img.shields.io/badge/YouTube-Product-red?style=for-the-badge)](https://youtu.be/b78Y7RwvYeU)
 
-## Why This Project Exists
+</div>
 
-### The problem
+---
 
-LLMs are operationally powerful but structurally opaque. Most developer tools stop at prompts, tokens, latency, and logs. They do not answer questions like:
+## Live Presentation
 
-- Which layers and heads were most active for this response?
-- Can we trace a "thought path" through the network in a way operators can inspect?
-- Can governance tools intervene on specific neural components instead of only blocking whole prompts or outputs?
+**HTML Presentation** — [Open in browser](https://fiscalmindset.github.io/Synapse-Graph/first_frame.html)
 
-### The solution
+The presentation walks through the complete demo flow in a video-frame aesthetic (no scrolling, single screen per scene):
+
+| Scene | Description |
+|-------|-------------|
+| [Intro](https://fiscalmindset.github.io/Synapse-Graph/first_frame.html) | Project overview, features, and graph visualization |
+| [Architecture](https://fiscalmindset.github.io/Synapse-Graph/video_diagram.html) | Component flow: Dashboard → Neural Proxy → Tracer → OpenMetadata |
+| [Tech Stack](https://fiscalmindset.github.io/Synapse-Graph/tech_stack.html) | Exact dependencies from pyproject.toml and package.json |
+| [Live Demo](https://fiscalmindset.github.io/Synapse-Graph/video_scene.html) | Demo video showcasing circuit discovery and quarantine workflow |
+| [OpenMetadata](https://fiscalmindset.github.io/Synapse-Graph/openmetadata_usage.html) | Governance plane: topology mapping and quarantine flow |
+| [Project Status](https://fiscalmindset.github.io/Synapse-Graph/project_status.html) | Current capabilities and open research challenges |
+| [Thank You](https://fiscalmindset.github.io/Synapse-Graph/last_frame.html) | Credits and links |
+
+## Video Demos
+
+<div align="center">
+
+[![Demo Video Thumbnail](https://img.youtube.com/vi/idOJYh6TUC8/0.jpg)](https://youtu.be/idOJYh6TUC8)
+
+**[Complete Demo Walkthrough](https://youtu.be/idOJYh6TUC8)** — 2-3 min walkthrough of the full circuit discovery → quarantine → re-run loop
+
+**[Product Demo](https://youtu.be/b78Y7RwvYeU)** — Live run showing active heads, lineage, and quarantine enforcement
+
+</div>
+
+---
+
+## The Problem
+
+LLMs are powerful but opaque. Current observability stops at prompts, tokens, latency, and logs. They don't answer:
+
+- *Which layers and heads were most active for this response?*
+- *Can we trace a "thought path" through the network in a way operators can inspect?*
+- *Can governance tools intervene on specific neural components?*
+
+## The Solution
 
 Synapse-Graph repurposes **OpenMetadata** as a governance and lineage system for transformer internals:
 
-- The model becomes a synthetic **database**.
-- Each transformer layer becomes a **table**.
-- Each attention head becomes a **column**.
-- High-activation paths become **lineage edges**.
-- A metadata tag like `DEFECTIVE` becomes an operational control signal that masks a head during the next generation.
+- Model → **Database**
+- Transformer layers → **Tables**
+- Attention heads → **Columns**
+- High-activation paths → **Lineage edges**
+- `DEFECTIVE` tag → **Runtime control signal** that masks a head during next generation
 
-### The impact
+## The Impact
 
-This turns model internals into something teams can observe, govern, and discuss with familiar data-platform primitives. Instead of treating neural behavior as black-box magic, Synapse-Graph makes it inspectable infrastructure.
+Turns model internals into observable, governable infrastructure. Instead of treating neural behavior as a black box, Synapse-Graph makes it **inspectable infrastructure** with familiar data-platform primitives.
 
-## What Makes It Novel
-
-- It treats **mechanistic interpretability data** as metadata assets, not just research artifacts.
-- It bridges a **local generation engine** like Ollama with a parallel **hook-instrumented PyTorch tracer**.
-- It closes the loop between **governance** and **runtime control** by letting OpenMetadata tags modify future generations.
-- It frames model debugging using concepts data teams already understand: schemas, lineage, classifications, and tags.
-
-## How Clearly The Project Should Be Presented
-
-If this is being judged on presentation quality, the README, demo, and submission should all communicate the same three things immediately:
-
-### 1. Problem
-
-Local LLMs are powerful but opaque. Teams lack a way to inspect internal activity or govern specific neural components in real time.
-
-### 2. Solution
-
-Synapse-Graph maps transformer layers and heads into OpenMetadata, captures live attention activity with PyTorch hooks, and visualizes active lineage in a premium operator dashboard.
-
-### 3. Impact
-
-The system gives developers a practical way to inspect, audit, and intervene on model behavior using tools and governance patterns they already know.
-
-For a strong submission, make sure the demo and write-up answer:
-
-- **What is broken today?** LLM observability is mostly surface-level.
-- **What did we build?** A neural proxy plus lineage visualizer plus metadata-driven firewall.
-- **Why does it matter?** It makes local models more understandable, governable, and safer to operate.
-- **What is the proof?** A live run showing active heads, OpenMetadata lineage, and a tagged head being masked on the next generation.
-
-## Demo Narrative
-
-Use this sequence for a clean 2-3 minute hackathon demo:
-
-1. Start with the thesis: "We hijacked OpenMetadata to map the internal neural architecture of a local LLM in real time."
-2. Show the dashboard and send a prompt through the local model.
-3. Point out that Ollama handles the primary generation while the PyTorch tracer captures per-head attention activity in parallel.
-4. Show the active lineage path lighting up in the graph as tokens stream back.
-5. Open the OpenMetadata side and tag a head or layer as `DEFECTIVE`.
-6. Trigger the defect sync endpoint or use the dashboard sync control.
-7. Run the same or a similar prompt again and show that the tagged head is now masked during generation.
-8. Close with the impact: "This turns model interpretability into an operational control plane, not just a static visualization."
-
-## Architecture
-
-```mermaid
-flowchart LR
-    U["User Prompt"] --> FE["Next.js Dashboard"]
-    FE --> API["FastAPI Neural Proxy"]
-    API --> OLLAMA["Ollama Local Generation"]
-    API --> HF["Hooked HF/PyTorch Shadow Model"]
-    HF --> TRACE["Attention Head Activations"]
-    TRACE --> API
-    API --> OM["OpenMetadata"]
-    OM --> API
-    API --> FE
-```
-
-    ## Tech stack & architecture (explicit)
-
-    This section lists the actual technologies used in the repository (sourced from `backend/pyproject.toml` and `frontend/package.json`). Do not rely on these as design-time guesses — they are taken directly from project manifest files.
-
-    - Python: `>=3.11,<3.13` (see `backend/pyproject.toml`).
-    - Backend (selected deps from `backend/pyproject.toml`):
-      - `fastapi` (HTTP API)
-      - `httpx` (REST client)
-      - `openmetadata-ingestion` (OpenMetadata ingestion / SDK)
-      - `pydantic-settings` (configuration)
-      - `torch` and `transformers` (hooked shadow tracer)
-      - `uvicorn[standard]` (ASGI server)
-    - Frontend (selected deps from `frontend/package.json`):
-      - `next` (Next.js 15)
-      - `react` / `react-dom` (React 19)
-      - `@xyflow/react` (React Flow / graph visualization)
-      - `recharts` (activation charts)
-      - `tailwindcss` (styling)
-
-    Runtime architecture summary:
-
-    1. The user interacts with the `Next.js` dashboard which calls the FastAPI neural proxy.
-    2. The proxy orchestrates generation (prefers local Ollama where available) and concurrently runs a hook-instrumented Hugging Face tracer (PyTorch + `transformers`) to extract `AttentionTrace` objects.
-    3. Traces are ingested into OpenMetadata (topology, lineage) using `openmetadata-ingestion`; tags applied in OpenMetadata can be read back and converted into head masks by the runtime's `HeadMaskStore`.
-
-    If you need more detail or an exported architecture diagram (SVG/HTML), the repo includes `video_diagram.html` which renders the runtime flow and lists the exact manifest entries used.
-
-## Core Capabilities
-
-- **Local-first generation**: Prefers Ollama when `http://127.0.0.1:11434` is available.
-- **Mechanistic tracing**: Uses `register_forward_hook` to capture attention-head activity from a Hugging Face model.
-- **Metadata translation**: Creates OpenMetadata entities for the model, layers, and heads.
-- **Dynamic lineage**: Emits lineage edges for high-activation paths during generation.
-- **Neural quarantine**: Applies `DEFECTIVE` OpenMetadata tags as live head masks for future generations.
-- **Operator dashboard**: Streams completions, shows activation charts, and renders the synapse graph in real time.
-
-## Repository Layout
-
-- `backend/`: FastAPI service, inference engine, OpenMetadata integration, lineage ingestion, and head masking.
-- `frontend/`: Next.js dashboard, React Flow synapse visualizer, Recharts activation panels, and SSE client.
-
-## Backend Overview
-
-The backend has three main responsibilities:
-
-### 1. Inference and tracing
-
-[`backend/app/inference.py`](backend/app/inference.py)
-
-- Detects whether Ollama is available.
-- Uses Ollama as the primary generator when possible.
-- Loads a hook-instrumented Hugging Face model for topology discovery and attention capture.
-- Tracks masked heads and applies zeroing before attention outputs are projected.
-
-### 2. Metadata translation
-
-[`backend/app/om_client.py`](backend/app/om_client.py)
-
-- Creates synthetic OpenMetadata services, databases, schemas, tables, and columns.
-- Maps layers to tables and heads to columns.
-- Sends lineage edges representing the active neural route.
-- Polls OpenMetadata tags and converts `DEFECTIVE` annotations into head masks.
-
-### 3. Runtime orchestration
-
-[`backend/app/main.py`](backend/app/main.py)
-
-- Exposes REST and SSE endpoints for state, generation, OpenMetadata sync, and HF preload.
-- Keeps the latest session snapshot available for the frontend.
-- Synchronizes defect tags before generation and ingests lineage asynchronously.
-
-## Frontend Overview
-
-The dashboard is designed as a premium operator console rather than a generic AI chat app.
-
-Key UI surfaces:
-
-- [`frontend/components/synapse-dashboard.tsx`](frontend/components/synapse-dashboard.tsx): main dashboard shell, prompt console, logs, and metrics.
-- [`frontend/components/synapse-graph.tsx`](frontend/components/synapse-graph.tsx): vertical transformer graph with highlighted lineage edges.
-- [`frontend/components/activation-chart.tsx`](frontend/components/activation-chart.tsx): layer and head activation charts.
-- [`frontend/lib/api.ts`](frontend/lib/api.ts): state fetch, defect sync, HF preload, and streaming generation client.
+---
 
 ## Quickstart
 
@@ -178,163 +72,215 @@ Key UI surfaces:
 
 - Python `3.11` or `3.12`
 - Node.js `20+`
-- `npm`
-- Optional but recommended: local Ollama at `http://127.0.0.1:11434`
-- Optional but recommended: OpenMetadata at `http://127.0.0.1:8585`
+- Optional: [Ollama](https://ollama.com) at `http://127.0.0.1:11434`
+- Optional: [OpenMetadata](https://openmetadata.org) at `http://127.0.0.1:8585`
 
-### 1. Backend setup
-
-From the repository root:
+### 1. Backend
 
 ```bash
+git clone https://github.com/FiscalMindset/Synapse-Graph.git
+cd Synapse-Graph
+
 python3.11 -m venv .venv
 source .venv/bin/activate
-python -m ensurepip --upgrade
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -e ./backend
+
+pip install -e ./backend
 cp backend/.env.example backend/.env
-```
 
-If you prefer Python `3.12`, replace `python3.11` with `python3.12`.
-
-### 2. Run the backend
-
-```bash
 cd backend
 python -m uvicorn app.main:app --reload --port 8000
 ```
 
-Use `python -m uvicorn`, not bare `uvicorn`, so the active virtual environment is always used.
-
-### 3. Frontend setup
-
-In a second terminal:
+### 2. Frontend
 
 ```bash
+# in a new terminal
 cd frontend
 cp .env.local.example .env.local
 npm install
 npm run dev
 ```
 
-The frontend defaults to `http://127.0.0.1:8000` for the backend. Override it with `NEXT_PUBLIC_NEURAL_PROXY_URL` in `frontend/.env.local` if needed.
+Dashboard: `http://localhost:3000`
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Operator Dashboard                      │
+│              Next.js + React + @xyflow/react               │
+└─────────────────────────┬───────────────────────────────────┘
+                        │ REST + SSE
+┌─────────────────────────▼───────────────────────────────────┐
+│                  Neural Proxy (FastAPI)                     │
+│         Orchestrates generation + tracing + governance        │
+└──────┬────────────────────┬────────────────────┬────────────┘
+       │                    │                    │
+       ▼                    ▼                    ▼
+┌─────────────┐    ┌────────────────┐    ┌─────────────────┐
+│   Ollama     │    │  HF Tracer      │    │  OpenMetadata    │
+│ (Preferred) │    │ (PyTorch hooks) │    │ (Governance)     │
+│             │    │                │    │                  │
+│ Generation  │    │ Attention      │    │ Topology        │
+│             │    │ activation     │    │ Lineage          │
+│             │    │ capture        │    │ Tags → Masks     │
+└─────────────┘    └────────────────┘    └─────────────────┘
+```
+
+**Runtime flow:**
+
+1. Operator submits prompt via dashboard
+2. Backend runs generation (Ollama preferred) + parallel HF tracing
+3. Tracer captures per-layer, per-head attention activations via `register_forward_hook`
+4. Backend ingests lineage edges into OpenMetadata
+5. Operator tags defective heads → backend converts tags to head masks
+6. Subsequent generations run with masked heads zeroed out
+
+---
+
+## Tech Stack
+
+### Backend
+```toml
+# backend/pyproject.toml
+[project]
+requires-python = ">=3.11,<3.13"
+
+dependencies = [
+    "fastapi>=0.115.0",
+    "torch>=2.4.0",
+    "transformers>=4.46.0",
+    "openmetadata-ingestion>=1.12.0",
+    "httpx>=0.28.0",
+    "pydantic-settings>=2.7.0",
+    "uvicorn[standard]>=0.32.0",
+    "accelerate>=1.1.0",
+    "cachetools>=5.3.0",
+]
+```
+
+### Frontend
+```json
+{
+  "dependencies": {
+    "next": "^15.2.0",
+    "react": "^19.0.0",
+    "@xyflow/react": "^12.4.4",
+    "recharts": "^2.15.0",
+    "lucide-react": "^0.468.0"
+  }
+}
+```
+
+---
+
+## Core Capabilities
+
+| Capability | Description |
+|------------|-------------|
+| **Circuit Discovery** | Ablation sweeps (single + pair) to find heads that materially change outputs |
+| **Attention Tracing** | Hook-based per-layer, per-head activation capture via PyTorch |
+| **OpenMetadata Governance** | Topology bootstrap, lineage ingestion, column-level tagging |
+| **Runtime Masking** | `DEFECTIVE` tags → head masks applied to subsequent generations |
+| **SSE Streaming** | Real-time progress updates for discovery and generation |
+| **Evidence Quality** | Scoring system for trace confidence (high/medium/low) |
+
+---
+
+## API Endpoints
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/v1/state` | GET | Current runtime state |
+| `/api/v1/generate/stream` | POST | Stream generation with trace steps |
+| `/api/v1/autopsy/discover_circuit` | POST | Discover hallucination circuits |
+| `/api/v1/autopsy/causal` | POST | Run causal autopsy on a head |
+| `/api/v1/openmetadata/bootstrap` | POST | Bootstrap OpenMetadata catalog |
+| `/api/v1/openmetadata/sync-defects` | POST | Sync defective heads from OpenMetadata |
+| `/api/v1/openmetadata/quarantine` | POST | Quarantine heads in OpenMetadata |
+| `/api/v1/webhooks/openmetadata` | POST | Handle OpenMetadata webhooks |
+| `/api/v1/governance/local-mask` | POST | Set local head mask |
+| `/api/v1/hf/preload` | POST | Force-load HuggingFace tracer |
+
+---
+
+## OpenMetadata Usage
+
+**Topology Bootstrap:**
+```
+Service: Synapse_Neural_Service
+  └── Database: {Model_Name}
+        └── Schema: Transformer_Graph
+              ├── Table: Prompt_Ingress
+              ├── Table: Response_Egress
+              └── Table: Layer_N (one per layer)
+                    └── Column: Head_N (one per head)
+```
+
+**Governance Loop:**
+```
+1. Operator tags Layer_N/Head_N as DEFECTIVE in OpenMetadata
+2. Backend calls sync-defects → reads tags
+3. HeadMaskStore updates → masks apply to next generation
+4. Masked heads zeroed via projection hooks
+```
+
+---
+
+## Repository Layout
+
+```
+Synapse-Graph/
+├── backend/
+│   ├── app/
+│   │   ├── main.py          # FastAPI app + endpoints
+│   │   ├── inference.py     # Generation + tracing engine
+│   │   └── om_client.py    # OpenMetadata client
+│   └── tests/
+│       ├── test_quarantine.py
+│       └── test_discover_quarantine_integration.py
+├── frontend/
+│   ├── app/                # Next.js app router
+│   ├── components/        # Dashboard, graph, charts
+│   └── lib/               # API client
+└── first_frame.html       # GitHub Pages presentation
+```
+
+---
 
 ## Environment Configuration
 
-### Backend
-
-Copy:
-
 ```bash
-cp backend/.env.example backend/.env
+# backend/.env
+SYNAPSE_OPENMETADATA_ENABLED=true
+SYNAPSE_OPENMETADATA_HOST=http://127.0.0.1:8585
+SYNAPSE_OLLAMA_MODEL=qwen2.5:3b-instruct
+SYNAPSE_HF_MODEL_NAME=Qwen/Qwen2.5-1.5B-Instruct
+SYNAPSE_PRELOAD_SHADOW_MODEL=true
 ```
 
-Common variables:
+---
 
-- `SYNAPSE_OPENMETADATA_ENABLED`
-- `SYNAPSE_OPENMETADATA_HOST`
-- `SYNAPSE_OPENMETADATA_JWT_TOKEN`
-- `SYNAPSE_OLLAMA_MODEL`
-- `SYNAPSE_HF_MODEL_NAME`
-- `SYNAPSE_PRELOAD_SHADOW_MODEL`
+## Demo Workflow
 
-Authentication for private Hugging Face models
+1. **Start**: Boot dashboard, verify Ollama or HF fallback
+2. **Trace**: Submit prompt → watch synapse graph light up
+3. **Discover**: Select hallucination token → run circuit discovery
+4. **Quarantine**: Tag defective head → sync to backend
+5. **Verify**: Re-run prompt → show masked heads in output
 
-- `SYNAPSE_HF_TOKEN`: Optional. If the configured `SYNAPSE_HF_MODEL_NAME` points to a private or gated HF repo, set this to a valid HF Hub token so the backend can download the tokenizer and model weights. The server also honors common env vars `HF_HUB_TOKEN`, `HUGGINGFACE_HUB_TOKEN`, and `HF_TOKEN`.
-- Alternatively, authenticate locally with the Hugging Face CLI:
+---
 
-```bash
-pip install huggingface-hub
-huggingface-cli login
-```
+## License
 
-Notes:
+MIT
 
-- If you intend to use a local Ollama model (for example `phi3:latest`), set `SYNAPSE_OLLAMA_MODEL` and prefer Ollama for generation. Using an Ollama-style identifier in `SYNAPSE_HF_MODEL_NAME` may result in attempted HF lookups; the runtime now heuristically skips HF loading for simple colon-style identifiers and will log guidance.
-- To force the HF tracer to load (useful after setting an auth token), call the `/api/v1/hf/preload` endpoint or set `SYNAPSE_PRELOAD_SHADOW_MODEL=true` before startup.
+---
 
-### Frontend
-
-Copy:
-
-```bash
-cp frontend/.env.local.example frontend/.env.local
-```
-
-Key variable:
-
-- `NEXT_PUBLIC_NEURAL_PROXY_URL`
-
-## How To Test Whether The Idea Works
-
-This project should be tested as a sequence of observable proofs, not just "does the app boot."
-
-### Test 1. Local generation is live
-
-- Start the backend and frontend.
-- Open the dashboard.
-- Confirm the backend reports `Ollama live` if Ollama is running, otherwise `HF fallback`.
-- Submit a prompt and verify text streams back.
-
-### Test 2. Neural tracing is live
-
-- Watch the synapse graph during generation.
-- Confirm lineage edges light up as trace steps arrive.
-- Verify the activation panel updates with per-layer and per-head activity.
-
-### Test 3. OpenMetadata translation works
-
-- Call the backend bootstrap or state endpoints.
-- Verify that OpenMetadata contains:
-  - one synthetic database for the model
-  - one schema for the transformer graph
-  - one table per layer
-  - one column per head
-
-### Test 4. Dynamic lineage ingestion works
-
-- Run a prompt through the system.
-- Inspect OpenMetadata lineage and verify prompt-to-layer-to-response relationships were created.
-
-### Test 5. Governance actually changes runtime behavior
-
-- Tag a layer or head in OpenMetadata as `DEFECTIVE`.
-- Trigger a sync from the dashboard or call the sync endpoint.
-- Run another prompt.
-- Verify the masked head count increases and the next generation runs with that head zeroed out.
-
-If all five tests pass, the idea is not just "interesting on paper" but working as an end-to-end system.
-
-## Submission & Form
-
-If you're preparing a submission or a short demo, a local `form.md` file is provided in the repository root and is ignored by git (see `.gitignore`). `form.md` contains a filled project submission form with the project description, demo script, tech stack, and notes about OpenMetadata usage. Use that file as a basis for any hackathon or demo submission and paste the YouTube demo link there once available.
-
-Suggested next steps for public demos:
-
-- Record a 2–3 minute demo that follows the demo narrative (prompt → trace → quarantine → re-run).
-- Optional: deploy the frontend to Vercel and backend to a small VM or container registry to produce a public deployment link.
-
-
-## Useful Endpoints
-
-- `GET /health`
-- `GET /api/v1/state`
-- `POST /api/v1/openmetadata/bootstrap`
-- `POST /api/v1/openmetadata/sync-defects`
-- `POST /api/v1/hf/preload`
-- `POST /api/v1/generate`
-- `POST /api/v1/generate/stream`
-
-## Example Demo Prompt
-
-Use a prompt that makes the interpretability story easy to explain:
-
-```text
-Trace the attention route you would use to explain why masking a single head can change a model's response.
-```
-
-## Known Runtime Notes
-
-- The backend is pinned to Python `<3.13` because PyTorch and parts of the OpenMetadata stack are more reliable on Python `3.11` and `3.12`.
-- Ollama is preferred for user-facing generation, but the Hugging Face tracer may still need to load on first run to populate the neural topology.
-- The first Hugging Face model load can take time if weights are not already present locally.
+<p align="center">
+  <a href="https://github.com/FiscalMindset/Synapse-Graph">GitHub</a> ·
+  <a href="https://fiscalmindset.github.io/Synapse-Graph/first_frame.html">Presentation</a> ·
+  <a href="https://youtu.be/idOJYh6TUC8">YouTube Demo</a>
+</p>
