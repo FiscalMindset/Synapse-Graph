@@ -19,7 +19,7 @@
 | Scene | Description |
 |-------|-------------|
 | [Intro](https://fiscalmindset.github.io/Synapse-Graph/first_frame.html) | Project overview, features, graph visualization |
-| [Architecture (Interactive)](https://fiscalmindset.github.io/Synapse-Graph/architecture.html) | Clickable component diagram |
+| [Architecture](https://fiscalmindset.github.io/Synapse-Graph/architecture.html) | Interactive component diagram |
 | [Tech Stack](https://fiscalmindset.github.io/Synapse-Graph/tech_stack.html) | Dependencies |
 | [Demo](https://fiscalmindset.github.io/Synapse-Graph/video_scene.html) | Demo video |
 | [OpenMetadata](https://fiscalmindset.github.io/Synapse-Graph/openmetadata_usage.html) | Governance plane |
@@ -59,29 +59,9 @@ Turns model internals into **inspectable infrastructure** with familiar data-pla
 
 ## Architecture
 
-**Interactive diagram: [Click here to explore](https://fiscalmindset.github.io/Synapse-Graph/architecture.html)** — Click on any component for implementation details.
+![Synapse-Graph Architecture](architecture.svg)
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Operator Dashboard                       │
-│              Next.js + React + @xyflow/react               │
-└─────────────────────────┬───────────────────────────────────┘
-                          │ REST + SSE
-┌─────────────────────────▼───────────────────────────────────┐
-│                  Neural Proxy (FastAPI)                   │
-│         Orchestrates generation + tracing + governance     │
-└──────┬────────────────────┬────────────────────┬───────────┘
-       │                    │                    │
-       ▼                    ▼                    ▼
-┌─────────────┐    ┌────────────────┐    ┌─────────────────┐
-│   Ollama     │    │  HF Tracer     │    │  OpenMetadata   │
-│ (Preferred) │    │ (PyTorch hooks)│    │  (Governance)   │
-│             │    │                │    │                 │
-│ Generation  │    │ Attention     │    │ Topology       │
-│             │    │ activation    │    │ Lineage        │
-│             │    │ capture       │    │ Tags → Masks   │
-└─────────────┘    └────────────────┘    └─────────────────┘
-```
+*For interactive diagram with clickable components: [open architecture.html](architecture.html)*
 
 ---
 
@@ -268,6 +248,7 @@ Synapse-Graph/
 │   ├── components/         # Dashboard, graph, charts
 │   └── lib/               # API client
 ├── architecture.html       # Interactive architecture diagram
+├── architecture.svg       # SVG diagram for README
 └── first_frame.html        # GitHub Pages presentation
 ```
 

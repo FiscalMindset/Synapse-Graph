@@ -1,0 +1,143 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 420" width="100%" style="background:#0a0f1a;border-radius:12px;">
+  <defs>
+    <linearGradient id="cardBg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:rgba(62,225,255,0.15);stop-opacity:1" />
+      <stop offset="100%" style="stop-color:rgba(62,225,255,0.05);stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="successBg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:rgba(74,222,128,0.15);stop-opacity:1" />
+      <stop offset="100%" style="stop-color:rgba(74,222,128,0.05);stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="warningBg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:rgba(251,191,36,0.15);stop-opacity:1" />
+      <stop offset="100%" style="stop-color:rgba(251,191,36,0.05);stop-opacity:1" />
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  
+  <!-- Title -->
+  <text x="400" y="35" text-anchor="middle" fill="#e6eef8" font-family="system-ui,sans-serif" font-size="18" font-weight="700">Synapse-Graph Architecture</text>
+  <text x="400" y="55" text-anchor="middle" fill="#6b8aad" font-family="system-ui,sans-serif" font-size="12">Click components for details</text>
+  
+  <!-- Dashboard Node -->
+  <g transform="translate(50, 80)">
+    <rect width="140" height="100" rx="10" fill="url(#cardBg)" stroke="#60d4ff" stroke-width="2"/>
+    <rect x="10" y="10" width="30" height="30" rx="6" fill="rgba(62,225,255,0.3)"/>
+    <text x="25" y="30" text-anchor="middle" fill="#0a0f1a" font-size="16">🎨</text>
+    <text x="70" y="20" text-anchor="middle" fill="#60d4ff" font-family="system-ui,sans-serif" font-size="10" font-weight="600">OPERATOR</text>
+    <text x="70" y="38" text-anchor="middle" fill="#e6eef8" font-family="system-ui,sans-serif" font-size="13" font-weight="700">Dashboard</text>
+    <text x="70" y="56" text-anchor="middle" fill="#6b8aad" font-family="system-ui,sans-serif" font-size="9">Next.js + React</text>
+    <text x="70" y="70" text-anchor="middle" fill="#6b8aad" font-family="system-ui,sans-serif" font-size="9">@xyflow/react</text>
+    <text x="70" y="84" text-anchor="middle" fill="#6b8aad" font-family="system-ui,sans-serif" font-size="9">Recharts</text>
+  </g>
+  
+  <!-- Arrow: Dashboard to Proxy -->
+  <path d="M190 130 L260 130" stroke="#60d4ff" stroke-width="2" fill="none"/>
+  <polygon points="255,126 265,130 255,134" fill="#60d4ff"/>
+  <text x="225" y="122" text-anchor="middle" fill="#6b8aad" font-family="system-ui,sans-serif" font-size="9">REST + SSE</text>
+  
+  <!-- Neural Proxy Node -->
+  <g transform="translate(270, 90)">
+    <rect width="200" height="100" rx="10" fill="url(#cardBg)" stroke="#60d4ff" stroke-width="2" filter="url(#glow)"/>
+    <rect x="10" y="10" width="30" height="30" rx="6" fill="rgba(62,225,255,0.4)"/>
+    <text x="25" y="30" text-anchor="middle" fill="#0a0f1a" font-size="16">⚡</text>
+    <text x="100" y="20" text-anchor="middle" fill="#60d4ff" font-family="system-ui,sans-serif" font-size="10" font-weight="600">NEURAL PROXY</text>
+    <text x="100" y="38" text-anchor="middle" fill="#e6eef8" font-family="system-ui,sans-serif" font-size="13" font-weight="700">FastAPI Runtime</text>
+    <text x="100" y="56" text-anchor="middle" fill="#6b8aad" font-family="system-ui,sans-serif" font-size="9">Generation + Tracing</text>
+    <text x="100" y="70" text-anchor="middle" fill="#6b8aad" font-family="system-ui,sans-serif" font-size="9">Governance + SSE</text>
+    <text x="100" y="84" text-anchor="middle" fill="#6b8aad" font-family="system-ui,sans-serif" font-size="9">HeadMaskStore</text>
+  </g>
+  
+  <!-- Arrow: Proxy to Ollama -->
+  <path d="M270 140 L270 180 L100 180 L100 190" stroke="#60d4ff" stroke-width="2" fill="none"/>
+  <polygon points="96,186 100,196 104,186" fill="#60d4ff"/>
+  <text x="185" y="175" text-anchor="middle" fill="#6b8aad" font-family="system-ui,sans-serif" font-size="9">Generation</text>
+  
+  <!-- Arrow: Proxy to Tracer -->
+  <path d="M270 190 L270 195" stroke="#60d4ff" stroke-width="2" fill="none"/>
+  <polygon points="266,191 270,201 274,191" fill="#60d4ff"/>
+  
+  <!-- Arrow: Proxy to OM -->
+  <path d="M470 140 L470 180 L600 180 L600 190" stroke="#60d4ff" stroke-width="2" fill="none"/>
+  <polygon points="596,186 600,196 604,186" fill="#60d4ff"/>
+  <text x="535" y="175" text-anchor="middle" fill="#6b8aad" font-family="system-ui,sans-serif" font-size="9">Topology + Lineage</text>
+  
+  <!-- Ollama Node -->
+  <g transform="translate(30, 195)">
+    <rect width="140" height="70" rx="8" fill="url(#successBg)" stroke="#4ade80" stroke-width="2"/>
+    <rect x="10" y="10" width="28" height="28" rx="6" fill="rgba(74,222,128,0.3)"/>
+    <text x="24" y="28" text-anchor="middle" fill="#0a0f1a" font-size="14">🔥</text>
+    <text x="70" y="20" text-anchor="middle" fill="#4ade80" font-family="system-ui,sans-serif" font-size="10" font-weight="600">GENERATION</text>
+    <text x="70" y="38" text-anchor="middle" fill="#e6eef8" font-family="system-ui,sans-serif" font-size="13" font-weight="700">Ollama</text>
+    <text x="70" y="55" text-anchor="middle" fill="#6b8aad" font-family="system-ui,sans-serif" font-size="10">Local LLM</text>
+  </g>
+  
+  <!-- HF Tracer Node -->
+  <g transform="translate(200, 195)">
+    <rect width="140" height="70" rx="8" fill="url(#cardBg)" stroke="#60d4ff" stroke-width="2"/>
+    <rect x="10" y="10" width="28" height="28" rx="6" fill="rgba(62,225,255,0.3)"/>
+    <text x="24" y="28" text-anchor="middle" fill="#0a0f1a" font-size="14">🔍</text>
+    <text x="70" y="20" text-anchor="middle" fill="#60d4ff" font-family="system-ui,sans-serif" font-size="10" font-weight="600">TRACING</text>
+    <text x="70" y="38" text-anchor="middle" fill="#e6eef8" font-family="system-ui,sans-serif" font-size="13" font-weight="700">HF Tracer</text>
+    <text x="70" y="55" text-anchor="middle" fill="#6b8aad" font-family="system-ui,sans-serif" font-size="10">PyTorch hooks</text>
+  </g>
+  
+  <!-- OpenMetadata Node -->
+  <g transform="translate(530, 195)">
+    <rect width="140" height="70" rx="8" fill="url(#warningBg)" stroke="#fbbf24" stroke-width="2"/>
+    <rect x="10" y="10" width="28" height="28" rx="6" fill="rgba(251,191,36,0.3)"/>
+    <text x="24" y="28" text-anchor="middle" fill="#0a0f1a" font-size="14">🛡️</text>
+    <text x="70" y="20" text-anchor="middle" fill="#fbbf24" font-family="system-ui,sans-serif" font-size="10" font-weight="600">GOVERNANCE</text>
+    <text x="70" y="38" text-anchor="middle" fill="#e6eef8" font-family="system-ui,sans-serif" font-size="13" font-weight="700">OpenMetadata</text>
+    <text x="70" y="55" text-anchor="middle" fill="#6b8aad" font-family="system-ui,sans-serif" font-size="10">Topology + Tags</text>
+  </g>
+  
+  <!-- DEFECTIVE Tag -->
+  <g transform="translate(530, 300)">
+    <rect width="140" height="50" rx="8" fill="rgba(239,68,68,0.15)" stroke="#ef4444" stroke-width="2"/>
+    <text x="70" y="28" text-anchor="middle" fill="#ef4444" font-family="system-ui,sans-serif" font-size="12" font-weight="700">DEFECTIVE</text>
+    <text x="70" y="42" text-anchor="middle" fill="#6b8aad" font-family="system-ui,sans-serif" font-size="10">→ Runtime Mask</text>
+  </g>
+  
+  <!-- Arrow: OM to DEFECTIVE -->
+  <path d="M600 265 L600 300" stroke="#ef4444" stroke-width="2" fill="none"/>
+  <polygon points="596,296 600,306 604,296" fill="#ef4444"/>
+  
+  <!-- OpenMetadata details -->
+  <g transform="translate(530, 370)">
+    <rect width="140" height="45" rx="6" fill="rgba(0,10,20,0.5)" stroke="#6b8aad" stroke-width="1"/>
+    <text x="70" y="18" text-anchor="middle" fill="#6b8aad" font-family="system-ui,sans-serif" font-size="9">Layer = Table</text>
+    <text x="70" y="32" text-anchor="middle" fill="#6b8aad" font-family="system-ui,sans-serif" font-size="9">Head = Column</text>
+  </g>
+  
+  <!-- HF Tracer details -->
+  <g transform="translate(200, 285)">
+    <rect width="140" height="45" rx="6" fill="rgba(0,10,20,0.5)" stroke="#6b8aad" stroke-width="1"/>
+    <text x="70" y="18" text-anchor="middle" fill="#6b8aad" font-family="system-ui,sans-serif" font-size="9">register_forward_hook</text>
+    <text x="70" y="32" text-anchor="middle" fill="#6b8aad" font-family="system-ui,sans-serif" font-size="9">AttentionTrace capture</text>
+  </g>
+  
+  <!-- Mask to OM arrow -->
+  <path d="M600 350 L600 370" stroke="#60d4ff" stroke-width="2" fill="none" stroke-dasharray="4,4"/>
+  
+  <!-- Legend -->
+  <g transform="translate(30, 330)">
+    <rect width="30" height="18" rx="4" fill="url(#cardBg)" stroke="#60d4ff"/>
+    <text x="40" y="13" fill="#e6eef8" font-family="system-ui,sans-serif" font-size="10">UI/Data</text>
+  </g>
+  <g transform="translate(100, 330)">
+    <rect width="30" height="18" rx="4" fill="url(#successBg)" stroke="#4ade80"/>
+    <text x="110" y="13" fill="#e6eef8" font-family="system-ui,sans-serif" font-size="10">Gen</text>
+  </g>
+  <g transform="translate(150, 330)">
+    <rect width="30" height="18" rx="4" fill="url(#warningBg)" stroke="#fbbf24"/>
+    <text x="160" y="13" fill="#e6eef8" font-family="system-ui,sans-serif" font-size="10">OM</text>
+  </g>
+</svg>
