@@ -14,4 +14,3 @@ build/
 backend/.env
 # Ignore local submission form
 form.md
-video_diagram.html
