@@ -57,31 +57,11 @@ Turns model internals into **inspectable infrastructure** with familiar data-pla
 
 ---
 
-## Interactive Architecture
+## Architecture
 
-**[Click here to explore the architecture diagram](https://fiscalmindset.github.io/Synapse-Graph/architecture.html)** — Click on any component to see details about implementation.
+<iframe src="architecture.html" width="100%" height="500" style="border:1px solid rgba(62, 225, 255, 0.3); border-radius: 12px; background: #0a0f1a;"></iframe>
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Operator Dashboard                       │
-│              Next.js + React + @xyflow/react               │
-└─────────────────────────┬───────────────────────────────────┘
-                          │ REST + SSE
-┌─────────────────────────▼───────────────────────────────────┐
-│                  Neural Proxy (FastAPI)                     │
-│         Orchestrates generation + tracing + governance        │
-└──────┬────────────────────┬────────────────────┬───────────┘
-       │                    │                    │
-       ▼                    ▼                    ▼
-┌─────────────┐    ┌────────────────┐    ┌─────────────────┐
-│   Ollama     │    │  HF Tracer      │    │  OpenMetadata   │
-│ (Preferred) │    │ (PyTorch hooks) │    │  (Governance)   │
-│             │    │                │    │                 │
-│ Generation  │    │ Attention      │    │ Topology        │
-│             │    │ activation     │    │ Lineage         │
-│             │    │ capture        │    │ Tags → Masks    │
-└─────────────┘    └────────────────┘    └─────────────────┘
-```
+*Click on any component in the diagram above to see implementation details. For full-screen view, [open architecture.html](architecture.html)*
 
 ---
 
@@ -106,27 +86,6 @@ Turns model internals into **inspectable infrastructure** with familiar data-pla
 | `/api/v1/governance/clear-local-masks` | POST | Clear masks |
 | `/api/v1/hf/preload` | POST | Load HF tracer |
 
-**Pydantic Models:**
-```python
-class SessionSnapshot(BaseModel):
-    session_id: str
-    prompt: str
-    response_text: str
-    trace: AttentionTrace
-    masked_heads: list[HeadMask]
-
-class CircuitDiscoveryResponse(BaseModel):
-    target_hallucination_token: str
-    baseline: InferenceResponse
-    candidate_heads: list[CircuitHead]
-    sweep_results: list[CircuitAblationResult]
-    discovered_circuit: list[CircuitHead]
-    combined_causal_effect: float
-    verdict: str
-```
-
-### `backend/app/inference.py` — Generation + Tracing Engine
-
 **Execution Modes:**
 - `AUTO` — Prefer Ollama if available
 - `FAST` — Ollama + parallel HF tracing
@@ -147,21 +106,15 @@ def _make_projection_mask_hook(layer_idx, head_idx):
 1. Attention tensor masking
 2. Projection masking (hidden states)
 
-**AttentionTrace Captures:**
-- `max_attention_score` per head
-- `mean_attention_score` per head
-- `l2_norm`
-- `top_source_positions`
-- `top_source_tokens`
-
 **Default Models:**
 - Ollama: `qwen2.5:3b-instruct`
 - HuggingFace: `Qwen/Qwen2.5-1.5B-Instruct`
 - Dashboard default: `gpt2` (12 layers × 12 heads = 144 heads)
 
-### `backend/app/om_client.py` — OpenMetadata Client
+---
 
-**Topology Bootstrap:**
+## OpenMetadata Topology
+
 ```
 Service: Synapse_Neural_Service (type: MySQL)
   └── Database: Qwen_Qwen2.5-1.5B-Instruct
@@ -178,27 +131,20 @@ Service: Synapse_Neural_Service (type: MySQL)
 - Classification: `SynapseQuarantine`
 - Tag: `DEFECTIVE` (color: #39FF14)
 
-**API Calls:**
-- `POST /v1/tables/name/{fqn}/columns/{column}/tags` — Column tagging
-- `POST /v1/tables/name/{fqn}/tags` — Table-level fallback
-- `GET /v1/tables/name/{fqn}?fields=columns,tags` — Fetch with tags
-- `metadata.add_lineage()` — Lineage edges
-
 **Lineage:** `Prompt_Ingress → Layer_1 → ... → Layer_N → Response_Egress`
 
 ---
 
 ## Frontend Details
 
-### `frontend/app/page.tsx`
-```tsx
-import { SynapseDashboard } from "@/components/synapse-dashboard";
-export default function HomePage() {
-  return <SynapseDashboard />;
-}
-```
+### Dashboard Components
 
-### `frontend/components/synapse-dashboard.tsx`
+- **`frontend/components/synapse-dashboard.tsx`** — Main dashboard with metrics, discovery panel, governance controls
+- **`frontend/components/synapse-graph.tsx`** — @xyflow/react graph visualization
+- **`frontend/components/activation-chart.tsx`** — Per-layer, per-head activation charts
+- **`frontend/components/console-log.tsx`** — Real-time log stream display
+
+### Dashboard Features
 
 **Metric Cards:**
 - Generation Backend (Ollama live / HF inline)
@@ -216,25 +162,6 @@ export default function HomePage() {
 - Quarantine Top Head
 - Clear Local Masks
 - Sync Defects button
-
-### `frontend/components/synapse-graph.tsx`
-- Uses `@xyflow/react` (ReactFlow)
-- Nodes: prompt, response, layer nodes
-- Edges: attention flow connections
-- Dark mode with neon accents
-
-### `frontend/components/activation-chart.tsx`
-- Per-layer, per-head activation charts
-- Uses `recharts`
-
-### `frontend/components/console-log.tsx`
-- Channels: BOOT, SESSION, RUN, TRACE, DISCOVERY, SWEEP, QUARANTINE, MASK, SYNC, ERROR, DONE
-
-### `frontend/lib/api.ts`
-- State fetch
-- Defect sync
-- HF preload
-- Streaming generation client
 
 ---
 
