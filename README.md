@@ -19,7 +19,7 @@
 | Scene | Description |
 |-------|-------------|
 | [Intro](https://fiscalmindset.github.io/Synapse-Graph/first_frame.html) | Project overview, features, graph visualization |
-| [Architecture](https://fiscalmindset.github.io/Synapse-Graph/architecture.html) | Interactive component diagram |
+| [Architecture (Interactive)](https://fiscalmindset.github.io/Synapse-Graph/architecture.html) | Clickable component diagram |
 | [Tech Stack](https://fiscalmindset.github.io/Synapse-Graph/tech_stack.html) | Dependencies |
 | [Demo](https://fiscalmindset.github.io/Synapse-Graph/video_scene.html) | Demo video |
 | [OpenMetadata](https://fiscalmindset.github.io/Synapse-Graph/openmetadata_usage.html) | Governance plane |
@@ -59,9 +59,37 @@ Turns model internals into **inspectable infrastructure** with familiar data-pla
 
 ## Architecture
 
-![Synapse-Graph Architecture](architecture.svg)
+```mermaid
+flowchart LR
+    subgraph Dashboard["🎨 Operator Dashboard"]
+        D["Next.js<br/>React<br/>@xyflow/react"]
+    end
 
-*For interactive diagram with clickable components: [open architecture.html](architecture.html)*
+    subgraph Proxy["⚡ Neural Proxy (FastAPI)"]
+        P["Generation + Tracing<br/>Governance + SSE<br/>HeadMaskStore"]
+    end
+
+    subgraph Generation["🔥 Generation"]
+        O["Ollama<br/>(Preferred)"]
+    end
+
+    subgraph Tracing["🔍 Tracing"]
+        T["HF Tracer<br/>PyTorch hooks"]
+    end
+
+    subgraph Governance["🛡️ Governance"]
+        OM["OpenMetadata<br/>Topology + Lineage<br/>Tags → Masks"]
+        DEF["⛔ DEFECTIVE<br/>→ Runtime Mask"]
+    end
+
+    D -->|"REST + SSE"| P
+    P -->|"Generation"| O
+    P -->|"Tracing"| T
+    P -->|"Topology<br/>Lineage<br/>Tags"| OM
+    OM -->|"tag"| DEF
+```
+
+**Interactive diagram:** [Click here for full interactive architecture](https://fiscalmindset.github.io/Synapse-Graph/architecture.html)
 
 ---
 
@@ -115,16 +143,25 @@ def _make_projection_mask_hook(layer_idx, head_idx):
 
 ## OpenMetadata Topology
 
-```
-Service: Synapse_Neural_Service (type: MySQL)
-  └── Database: Qwen_Qwen2.5-1.5B-Instruct
-        └── Schema: Transformer_Graph
-              ├── Table: Prompt_Ingress
-              │       └── Columns: Prompt_Text, Prompt_Token_Count
-              ├── Table: Response_Egress
-              │       └── Column: Response_Text
-              └── Table: Layer_N (per layer)
-                      └── Column: Head_N (per head, FLOAT)
+```mermaid
+erDiagram
+    Service ||--o| Database : "Synapse_Neural_Service"
+    Database ||--o| Schema : "Transformer_Graph"
+    Schema ||--o| Table : "Layer_N (per layer)"
+    Schema ||--o| Table : "Prompt_Ingress"
+    Schema ||--o| Table : "Response_Egress"
+    Table ||--o| Column : "Head_N (per head)"
+
+    Service {
+        string name "Synapse_Neural_Service"
+        string type "mysql"
+    }
+
+    Column {
+        string name "Head_N"
+        string type "FLOAT"
+        string tag "DEFECTIVE/QUARANTINED"
+    }
 ```
 
 **Classification & Tags:**
@@ -223,6 +260,15 @@ Dashboard: `http://localhost:3000`
 
 ## Demo Workflow
 
+```mermaid
+flowchart TD
+    A["1. Start<br/>Boot dashboard"] --> B["2. Trace<br/>Submit prompt"]
+    B --> C["3. Discover<br/>Run circuit discovery"]
+    C --> D["4. Quarantine<br/>Push DEFECTIVE tags"]
+    D --> E["5. Verify<br/>Re-run prompt<br/>Show masked heads"]
+    E --> A
+```
+
 1. **Start** — Boot dashboard, verify "Ollama live" or "HF fallback"
 2. **Trace** — Submit prompt → watch synapse graph light up
 3. **Discover** — Enter hallucination token → run circuit discovery
@@ -248,7 +294,6 @@ Synapse-Graph/
 │   ├── components/         # Dashboard, graph, charts
 │   └── lib/               # API client
 ├── architecture.html       # Interactive architecture diagram
-├── architecture.svg       # SVG diagram for README
 └── first_frame.html        # GitHub Pages presentation
 ```
 
