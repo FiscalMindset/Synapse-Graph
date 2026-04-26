@@ -8,81 +8,79 @@
     <style>
       :root{--bg:#0a0f1a;--card-bg:rgba(15,25,45,0.85);--muted:#6b8aad;--accent:#60d4ff;--accent2:#3ee1ff;--glow:rgba(62,225,255,0.15);--success:#4ade80;--warning:#fbbf24;--danger:#f87171}
       @keyframes fadeUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
-      @keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+      @keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
       @keyframes border-glow{0%,100%{border-color:rgba(62,225,255,0.3)}50%{border-color:rgba(62,225,255,0.6)}}
       @keyframes scan-line{0%{top:-2px}100%{top:100%}}
       @keyframes count-up{from{opacity:0;transform:scale(0.8)}to{opacity:1;transform:scale(1)}}
       *{box-sizing:border-box}
-      html,body{height:100%;margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;background:var(--bg);color:#e6eef8;overflow-x:hidden}
-      .video-frame{position:relative;min-height:100vh;padding:40px;display:flex;flex-direction:column;align-items:center;justify-content:center}
+      html,body{height:100%;margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;background:var(--bg);color:#e6eef8;overflow:hidden}
+      .video-frame{position:relative;height:100vh;padding:20px;display:flex;flex-direction:column;align-items:center;justify-content:center}
       .video-frame::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,transparent,var(--accent2),var(--accent),transparent);animation:scan-line 3s linear infinite;opacity:0.5}
-      .frame-border{position:absolute;top:20px;left:20px;right:20px;bottom:20px;border:1px solid rgba(62,225,255,0.2);border-radius:8px;pointer-events:none;animation:border-glow 4s ease-in-out infinite}
-      .card{background:var(--card-bg);backdrop-filter:blur(20px);border:1px solid rgba(62,225,255,0.15);border-radius:16px;padding:32px;max-width:1100px;width:100%;animation:fadeUp .8s ease both;box-shadow:0 20px 60px rgba(0,0,0,0.5),inset 0 1px 0 rgba(255,255,255,0.05)}
-      h1{font-size:32px;font-weight:800;margin:0 0 8px 0;background:linear-gradient(135deg,#e6eef8,#60d4ff);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
-      .subtitle{color:var(--muted);font-size:14px;margin-bottom:24px}
-      .mission-box{background:linear-gradient(135deg,rgba(62,225,255,0.1),rgba(96,212,255,0.05));border:1px solid rgba(62,225,255,0.2);border-radius:12px;padding:20px 24px;margin-bottom:24px;display:flex;align-items:center;gap:16px}
-      .mission-icon{width:48px;height:48px;background:linear-gradient(135deg,var(--accent2),var(--accent));border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:24px;flex-shrink:0}
-      .mission-text{font-size:15px;color:#e6eef8;line-height:1.6}
+      .frame-border{position:absolute;top:12px;left:12px;right:12px;bottom:12px;border:1px solid rgba(62,225,255,0.2);border-radius:8px;pointer-events:none;animation:border-glow 4s ease-in-out infinite}
+      .scene-label{position:absolute;top:18px;left:18px;background:linear-gradient(135deg,rgba(62,225,255,0.2),rgba(96,212,255,0.1));padding:5px 10px;border-radius:6px;font-size:10px;font-weight:600;color:var(--accent2);letter-spacing:1px}
+      .card{background:var(--card-bg);backdrop-filter:blur(20px);border:1px solid rgba(62,225,255,0.15);border-radius:14px;padding:18px;max-width:1100px;width:100%;animation:fadeUp .8s ease both;box-shadow:0 20px 60px rgba(0,0,0,0.5),inset 0 1px 0 rgba(255,255,255,0.05);display:flex;flex-direction:column;gap:12px}
+      h1{font-size:24px;font-weight:800;margin:0;background:linear-gradient(135deg,#e6eef8,#60d4ff);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+      .subtitle{color:var(--muted);font-size:12px;margin:0}
+      .mission-box{background:linear-gradient(135deg,rgba(62,225,255,0.1),rgba(96,212,255,0.05));border:1px solid rgba(62,225,255,0.2);border-radius:10px;padding:14px 18px;display:flex;align-items:center;gap:12px}
+      .mission-icon{width:36px;height:36px;background:linear-gradient(135deg,var(--accent2),var(--accent));border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0}
+      .mission-text{font-size:12px;color:#e6eef8;line-height:1.5}
       .mission-text strong{color:var(--accent)}
-      .stat-row{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px}
-      .stat{background:rgba(0,20,40,0.6);border:1px solid rgba(62,225,255,0.1);border-radius:12px;padding:20px;text-align:center}
-      .stat-icon{width:40px;height:40px;background:linear-gradient(135deg,rgba(62,225,255,0.2),rgba(96,212,255,0.1));border-radius:10px;display:flex;align-items:center;justify-content:center;margin:0 auto 10px;font-size:20px}
-      .stat-num{font-size:28px;font-weight:800;color:var(--accent);animation:count-up 1s ease}
-      .stat-label{font-size:12px;color:var(--muted);margin-top:4px}
+      .stat-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;flex-shrink:0}
+      .stat{background:rgba(0,20,40,0.6);border:1px solid rgba(62,225,255,0.1);border-radius:10px;padding:12px;text-align:center}
+      .stat-icon{width:28px;height:28px;background:linear-gradient(135deg,rgba(62,225,255,0.2),rgba(96,212,255,0.1));border-radius:7px;display:flex;align-items:center;justify-content:center;margin:0 auto 6px;font-size:14px}
+      .stat-num{font-size:20px;font-weight:800;color:var(--accent);animation:count-up 1s ease}
+      .stat-label{font-size:10px;color:var(--muted);margin-top:2px}
       .stat.done .stat-num{color:var(--success)}
       .stat.progress .stat-num{color:var(--warning)}
-      .two-col{display:grid;grid-template-columns:1fr 1fr;gap:20px}
-      .panel{background:rgba(0,20,40,0.6);border:1px solid rgba(62,225,255,0.1);border-radius:12px;padding:24px}
-      .panel-title{font-size:16px;font-weight:700;color:var(--accent);margin:0 0 16px 0;display:flex;align-items:center;gap:10px}
+      .progress-bar{background:rgba(0,20,40,0.8);border-radius:999px;height:6px;overflow:hidden;border:1px solid rgba(62,225,255,0.1);flex-shrink:0}
+      .progress-fill{height:100%;background:linear-gradient(90deg,var(--accent2),var(--accent));border-radius:999px;transition:width 1s ease}
+      .two-col{display:grid;grid-template-columns:1fr 1fr;gap:12px;flex-shrink:0}
+      .panel{background:rgba(0,20,40,0.6);border:1px solid rgba(62,225,255,0.1);border-radius:10px;padding:14px}
+      .panel-title{font-size:13px;font-weight:700;color:var(--accent);margin:0 0 10px 0;display:flex;align-items:center;gap:8px}
       .checklist{list-style:none;margin:0;padding:0}
-      .checklist li{display:flex;align-items:flex-start;gap:10px;padding:10px 0;border-bottom:1px solid rgba(62,225,255,0.05)}
+      .checklist li{display:flex;align-items:flex-start;gap:8px;padding:7px 0;border-bottom:1px solid rgba(62,225,255,0.05)}
       .checklist li:last-child{border-bottom:none}
-      .check-icon{width:20px;height:20px;background:linear-gradient(135deg,var(--success),#22c55e);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;color:#052034;flex-shrink:0;margin-top:2px}
-      .check-text{font-size:13px;color:#e6eef8;line-height:1.5}
-      .check-text.done{color:var(--muted)}
-      .gaps-section{background:rgba(0,20,40,0.6);border:1px solid rgba(248,113,113,0.2);border-radius:12px;padding:24px;margin-top:24px}
-      .gaps-title{font-size:16px;font-weight:700;color:var(--danger);margin:0 0 8px 0;display:flex;align-items:center;gap:10px}
-      .gaps-subtitle{font-size:12px;color:var(--muted);margin-bottom:16px}
-      .gap-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
-      .gap-card{background:rgba(0,10,20,0.5);border:1px solid rgba(248,113,113,0.15);border-radius:10px;padding:16px;transition:all .3s ease}
-      .gap-card:hover{border-color:rgba(248,113,113,0.4);transform:translateY(-3px)}
-      .gap-icon{width:32px;height:32px;background:linear-gradient(135deg,rgba(248,113,113,0.2),rgba(248,113,113,0.1));border-radius:8px;display:flex;align-items:center;justify-content:center;margin-bottom:10px;font-size:16px}
-      .gap-title{font-size:13px;font-weight:600;color:#e6eef8;margin-bottom:4px}
-      .gap-desc{font-size:11px;color:var(--muted);line-height:1.5}
-      .gap-priority{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;margin-top:8px}
+      .check-icon{width:16px;height:16px;background:linear-gradient(135deg,var(--success),#22c55e);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9px;color:#052034;flex-shrink:0;margin-top:2px}
+      .check-text{font-size:11px;color:#e6eef8;line-height:1.4}
+      .gaps-section{background:rgba(0,20,40,0.6);border:1px solid rgba(248,113,113,0.2);border-radius:10px;padding:14px;flex-shrink:0}
+      .gaps-title{font-size:13px;font-weight:700;color:var(--danger);margin:0 0 4px 0;display:flex;align-items:center;gap:8px}
+      .gaps-subtitle{font-size:10px;color:var(--muted);margin-bottom:10px}
+      .gap-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+      .gap-card{background:rgba(0,10,20,0.5);border:1px solid rgba(248,113,113,0.15);border-radius:8px;padding:10px;transition:all .3s ease}
+      .gap-card:hover{border-color:rgba(248,113,113,0.4);transform:translateY(-2px)}
+      .gap-icon{width:24px;height:24px;background:linear-gradient(135deg,rgba(248,113,113,0.2),rgba(248,113,113,0.1));border-radius:6px;display:flex;align-items:center;justify-content:center;margin-bottom:6px;font-size:12px}
+      .gap-title{font-size:11px;font-weight:600;color:#e6eef8;margin-bottom:3px}
+      .gap-desc{font-size:10px;color:var(--muted);line-height:1.4}
+      .gap-priority{display:inline-block;padding:2px 6px;border-radius:8px;font-size:9px;font-weight:600;margin-top:6px}
       .gap-priority.high{background:rgba(248,113,113,0.15);color:var(--danger)}
       .gap-priority.medium{background:rgba(251,191,36,0.15);color:var(--warning)}
-      .progress-bar{background:rgba(0,20,40,0.8);border-radius:999px;height:8px;overflow:hidden;margin-top:20px;border:1px solid rgba(62,225,255,0.1)}
-      .progress-fill{height:100%;background:linear-gradient(90deg,var(--accent2),var(--accent));border-radius:999px;transition:width 1s ease}
-      .nav-links{display:flex;gap:16px;justify-content:center;margin-top:20px;flex-wrap:wrap}
-      a.nav{color:var(--accent);text-decoration:none;font-size:13px;padding:8px 16px;border-radius:8px;background:rgba(62,225,255,0.08);border:1px solid rgba(62,225,255,0.2);transition:all .2s ease}
+      .nav-links{display:flex;gap:10px;justify-content:center;flex-shrink:0}
+      a.nav{color:var(--accent);text-decoration:none;font-size:11px;padding:6px 14px;border-radius:8px;background:rgba(62,225,255,0.08);border:1px solid rgba(62,225,255,0.2);transition:all .2s ease}
       a.nav:hover{background:rgba(62,225,255,0.15);border-color:rgba(62,225,255,0.4)}
-      .scene-label{position:absolute;top:30px;left:30px;background:linear-gradient(135deg,rgba(62,225,255,0.2),rgba(96,212,255,0.1));padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;color:var(--accent2);letter-spacing:1px}
-      .vision-box{background:linear-gradient(135deg,rgba(62,225,255,0.08),rgba(96,212,255,0.03));border:1px solid rgba(62,225,255,0.15);border-radius:12px;padding:16px 20px;margin-top:20px}
-      .vision-title{font-size:13px;font-weight:700;color:var(--accent);margin-bottom:6px}
-      .vision-text{font-size:12px;color:var(--muted);line-height:1.6}
       @media (max-width:900px) {
-        .video-frame{padding:20px}
-        .frame-border{top:10px;left:10px;right:10px;bottom:10px}
-        .scene-label{top:15px;left:15px;font-size:10px;padding:4px 8px}
-        .card{padding:20px}
+        .video-frame{padding:16px}
+        .frame-border{top:8px;left:8px;right:8px;bottom:8px}
+        .scene-label{top:10px;left:10px;font-size:9px;padding:3px 6px}
+        .card{padding:14px;border-radius:10px}
         .stat-row{grid-template-columns:repeat(2,1fr)}
         .two-col{grid-template-columns:1fr}
-        .gap-grid{grid-template-columns:1fr}
-        h1{font-size:24px}
+        .gap-grid{grid-template-columns:repeat(2,1fr)}
+        h1{font-size:20px}
         .mission-box{flex-direction:column;text-align:center}
-        .nav-links{gap:8px}
-        a.nav{padding:6px 12px;font-size:12px}
+        .nav-links{gap:6px}
+        a.nav{padding:5px 10px;font-size:10px}
       }
       @media (max-width:600px) {
-        .video-frame{padding:10px}
-        .card{padding:16px;border-radius:12px}
-        .stat-row{grid-template-columns:1fr 1fr;gap:10px}
-        .stat{padding:12px}
-        .stat-num{font-size:20px}
-        .panel{padding:16px}
-        .gaps-section{padding:16px}
-        .gap-card{padding:12px}
+        .video-frame{padding:8px}
+        .card{padding:12px;border-radius:8px;gap:10px}
+        h1{font-size:16px}
+        .stat{padding:8px}
+        .stat-num{font-size:16px}
+        .panel{padding:10px}
+        .gaps-section{padding:10px}
+        .gap-card{padding:8px}
+        .gap-grid{grid-template-columns:1fr}
+        .nav-links{flex-wrap:wrap}
       }
     </style>
   </head>
@@ -91,8 +89,10 @@
       <div class="frame-border"></div>
       <div class="scene-label">SCENE 05 — PROJECT STATUS</div>
       <div class="card">
-        <h1>Synapse-Graph — Status & Gaps</h1>
-        <p class="subtitle">Making AI "black boxes" traceable — current state and open challenges</p>
+        <div>
+          <h1>Synapse-Graph — Status & Gaps</h1>
+          <p class="subtitle">Making AI "black boxes" traceable — current state and open challenges</p>
+        </div>
 
         <div class="mission-box">
           <div class="mission-icon">🎯</div>
@@ -125,11 +125,11 @@
         </div>
 
         <div class="progress-bar">
-          <div class="progress-fill" style="--progress:75%;width:75%"></div>
+          <div class="progress-fill" style="width:75%"></div>
         </div>
-        <div style="font-size:12px;color:var(--muted);margin-top:8px">Core pipeline working — significant gaps remain for production-grade interpretability</div>
+        <div style="font-size:10px;color:var(--muted)">Core pipeline working — significant gaps remain for production-grade interpretability</div>
 
-        <div class="two-col" style="margin-top:24px">
+        <div class="two-col">
           <div class="panel" style="animation:float 4s ease-in-out infinite">
             <div class="panel-title">✅ Completed Features</div>
             <ul class="checklist">
@@ -139,70 +139,45 @@
               <li><div class="check-icon">✓</div><span class="check-text">Frontend: synapse graph & differential overlays</span></li>
               <li><div class="check-icon">✓</div><span class="check-text">Causal discovery UI with attention visualization</span></li>
               <li><div class="check-icon">✓</div><span class="check-text">GitHub Actions CI: pytest + TypeScript checks</span></li>
-              <li><div class="check-icon">✓</div><span class="check-text">Documentation: form.md, video_script.md, explain.md</span></li>
               <li><div class="check-icon">✓</div><span class="check-text">HeadMaskStore runtime state management</span></li>
             </ul>
           </div>
 
           <div class="panel" style="animation:float 4.5s ease-in-out infinite;animation-delay:0.5s">
-            <div class="panel-title">🎯 Current Focus Areas</div>
+            <div class="panel-title">⚠️ Open Challenges</div>
             <ul class="checklist">
-              <li><div class="check-icon" style="background:linear-gradient(135deg,#fbbf24,#f59e0b)">→</div><span class="check-text">Pair ablation sweeps — single-head ablations done, pairs are slow</span></li>
-              <li><div class="check-icon" style="background:linear-gradient(135deg,#fbbf24,#f59e0b)">→</div><span class="check-text">Edge case handling — multi-head interactions not fully mapped</span></li>
-              <li><div class="check-icon" style="background:linear-gradient(135deg,#fbbf24,#f59e0b)">→</div><span class="check-text">Scalability — larger models have exponentially more heads</span></li>
+              <li><div class="check-icon" style="background:linear-gradient(135deg,#fbbf24,#f59e0b)">→</div><span class="check-text">Head ↔ Behavior Causality Not Proven (HIGH RISK)</span></li>
+              <li><div class="check-icon" style="background:linear-gradient(135deg,#fbbf24,#f59e0b)">→</div><span class="check-text">No Ground-Truth Validation (HIGH RISK)</span></li>
+              <li><div class="check-icon" style="background:linear-gradient(135deg,#fbbf24,#f59e0b)">→</div><span class="check-text">Scalability Gap: Head Explosion O(n²) (HIGH RISK)</span></li>
+              <li><div class="check-icon" style="background:linear-gradient(135deg,#fbbf24,#f59e0b)">→</div><span class="check-text">Token-Level vs Layer-Level Tracing (MEDIUM)</span></li>
+              <li><div class="check-icon" style="background:linear-gradient(135deg,#fbbf24,#f59e0b)">→</div><span class="check-text">Latency Overhead in Production (MEDIUM)</span></li>
             </ul>
           </div>
         </div>
 
         <div class="gaps-section">
-          <div class="gaps-title">
-            <span>⚠️</span> Open Challenges in Making AI Traceable
-          </div>
-          <div class="gaps-subtitle">Real product gaps that prevent this from being production-grade interpretability tooling</div>
-
+          <div class="gaps-title"><span>⚠️</span> Key Research Gaps</div>
+          <div class="gaps-subtitle">Real product gaps that prevent production-grade interpretability tooling</div>
           <div class="gap-grid">
             <div class="gap-card">
               <div class="gap-icon">🔬</div>
-              <div class="gap-title">Head ↔ Behavior Causality Not Proven</div>
-              <div class="gap-desc">We can ablate heads and observe output changes, but proving those heads *cause* hallucinations vs correlate with them is unsolved. Need counterfactual validation and ground-truth benchmarks.</div>
-              <span class="gap-priority high">HIGH RISK</span>
+              <div class="gap-title">Causality Not Proven</div>
+              <div class="gap-desc">Ablating heads shows output changes, but proving causation vs correlation is unsolved. Need counterfactual validation.</div>
+              <span class="gap-priority high">HIGH</span>
             </div>
             <div class="gap-card">
               <div class="gap-icon">🎯</div>
-              <div class="gap-title">No Ground-Truth Validation</div>
-              <div class="gap-desc">Without a dataset of known hallucination circuits, we can't measure false positives. Ranking heuristics are heuristic — we don't know if we're finding real causal circuits or just noise.</div>
-              <span class="gap-priority high">HIGH RISK</span>
+              <div class="gap-title">No Ground-Truth</div>
+              <div class="gap-desc">Without hallucination datasets, can't measure false positives. Ranking heuristics may find noise.</div>
+              <span class="gap-priority high">HIGH</span>
             </div>
             <div class="gap-card">
               <div class="gap-icon">📊</div>
-              <div class="gap-title">Scalability Gap: Head Explosion</div>
-              <div class="gap-desc">GPT-4 class models have 100B+ parameters. Pair ablation of all heads is O(n²). Current approach doesn't scale. Need intelligent pruning or hierarchical discovery before full sweeps.</div>
-              <span class="gap-priority high">HIGH RISK</span>
-            </div>
-            <div class="gap-card">
-              <div class="gap-icon">🔗</div>
-              <div class="gap-title">Token-Level vs Layer-Level Tracing</div>
-              <div class="gap-desc">Current traces operate at layer level. But hallucinations often emerge from specific token-to-token interactions. Need finer-grained token-level attribution.</div>
-              <span class="gap-priority medium">MEDIUM</span>
-            </div>
-            <div class="gap-card">
-              <div class="gap-icon">🧠</div>
-              <div class="gap-title">No Contextual Understanding</div>
-              <div class="gap-desc">Same head may be defective for some prompts but critical for others. Current masking is binary. Need prompt-type aware masking or dynamic quarantine.</div>
-              <span class="gap-priority medium">MEDIUM</span>
-            </div>
-            <div class="gap-card">
-              <div class="gap-icon">⏱️</div>
-              <div class="gap-title">Latency Overhead</div>
-              <div class="gap-desc">PyTorch hooks add inference latency. For production, tracing must be near-zero-cost. Current implementation is research-grade, not production-grade.</div>
-              <span class="gap-priority medium">MEDIUM</span>
+              <div class="gap-title">Head Explosion</div>
+              <div class="gap-desc">GPT-4 class models need O(n²) pair ablation. Current approach doesn't scale to large models.</div>
+              <span class="gap-priority high">HIGH</span>
             </div>
           </div>
-        </div>
-
-        <div class="vision-box">
-          <div class="vision-title">🔭 The Path Forward</div>
-          <div class="vision-text">To make AI truly traceable, we need: (1) ground-truth hallucination datasets to validate circuits, (2) scalable discovery algorithms that don't require O(n²) ablation, (3) token-level attribution instead of layer-level, (4) production-grade tracing with minimal latency overhead. This project is the foundation — these are the research problems that remain open.</div>
         </div>
 
         <div class="nav-links">
