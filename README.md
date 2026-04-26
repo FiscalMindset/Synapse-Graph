@@ -19,7 +19,7 @@
 | Scene | Description |
 |-------|-------------|
 | [Intro](https://fiscalmindset.github.io/Synapse-Graph/first_frame.html) | Project overview, features, graph visualization |
-| [Architecture](https://fiscalmindset.github.io/Synapse-Graph/architecture.html) | Interactive component diagram |
+| [Architecture (Interactive)](https://fiscalmindset.github.io/Synapse-Graph/architecture.html) | Clickable component diagram |
 | [Tech Stack](https://fiscalmindset.github.io/Synapse-Graph/tech_stack.html) | Dependencies |
 | [Demo](https://fiscalmindset.github.io/Synapse-Graph/video_scene.html) | Demo video |
 | [OpenMetadata](https://fiscalmindset.github.io/Synapse-Graph/openmetadata_usage.html) | Governance plane |
@@ -59,9 +59,29 @@ Turns model internals into **inspectable infrastructure** with familiar data-pla
 
 ## Architecture
 
-<iframe src="architecture.html" width="100%" height="500" style="border:1px solid rgba(62, 225, 255, 0.3); border-radius: 12px; background: #0a0f1a;"></iframe>
+**Interactive diagram: [Click here to explore](https://fiscalmindset.github.io/Synapse-Graph/architecture.html)** — Click on any component for implementation details.
 
-*Click on any component in the diagram above to see implementation details. For full-screen view, [open architecture.html](architecture.html)*
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Operator Dashboard                       │
+│              Next.js + React + @xyflow/react               │
+└─────────────────────────┬───────────────────────────────────┘
+                          │ REST + SSE
+┌─────────────────────────▼───────────────────────────────────┐
+│                  Neural Proxy (FastAPI)                   │
+│         Orchestrates generation + tracing + governance     │
+└──────┬────────────────────┬────────────────────┬───────────┘
+       │                    │                    │
+       ▼                    ▼                    ▼
+┌─────────────┐    ┌────────────────┐    ┌─────────────────┐
+│   Ollama     │    │  HF Tracer     │    │  OpenMetadata   │
+│ (Preferred) │    │ (PyTorch hooks)│    │  (Governance)   │
+│             │    │                │    │                 │
+│ Generation  │    │ Attention     │    │ Topology       │
+│             │    │ activation    │    │ Lineage        │
+│             │    │ capture       │    │ Tags → Masks   │
+└─────────────┘    └────────────────┘    └─────────────────┘
+```
 
 ---
 
