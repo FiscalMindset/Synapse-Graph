@@ -1,107 +1,10 @@
 # Synapse-Graph (AI Autopsy Engine)
 
-<div align="center">
-
 **Turn LLM internals into observable, governable infrastructure**
 
-[![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-Live-blue?style=for-the-badge)](https://fiscalmindset.github.io/Synapse-Graph/)
-[![YouTube Demo](https://img.shields.io/badge/YouTube-Demo-red?style=for-the-badge)](https://youtu.be/idOJYh6TUC8)
-[![YouTube Product](https://img.shields.io/badge/YouTube-Product-red?style=for-the-badge)](https://youtu.be/b78Y7RwvYeU)
-
-</div>
-
----
-
-## Live Presentation
-
-**HTML Presentation** — [Open in browser](https://fiscalmindset.github.io/Synapse-Graph/first_frame.html)
-
-The presentation walks through the complete demo flow in a video-frame aesthetic (no scrolling, single screen per scene):
-
-| Scene | Description |
-|-------|-------------|
-| [Intro](https://fiscalmindset.github.io/Synapse-Graph/first_frame.html) | Project overview, features, and graph visualization |
-| [Architecture](https://fiscalmindset.github.io/Synapse-Graph/video_diagram.html) | Component flow: Dashboard → Neural Proxy → Tracer → OpenMetadata |
-| [Tech Stack](https://fiscalmindset.github.io/Synapse-Graph/tech_stack.html) | Exact dependencies from pyproject.toml and package.json |
-| [Live Demo](https://fiscalmindset.github.io/Synapse-Graph/video_scene.html) | Demo video showcasing circuit discovery and quarantine workflow |
-| [OpenMetadata](https://fiscalmindset.github.io/Synapse-Graph/openmetadata_usage.html) | Governance plane: topology mapping and quarantine flow |
-| [Project Status](https://fiscalmindset.github.io/Synapse-Graph/project_status.html) | Current capabilities and open research challenges |
-| [Thank You](https://fiscalmindset.github.io/Synapse-Graph/last_frame.html) | Credits and links |
-
-## Video Demos
-
-<div align="center">
-
-[![Demo Video Thumbnail](https://img.youtube.com/vi/idOJYh6TUC8/0.jpg)](https://youtu.be/idOJYh6TUC8)
-
-**[Complete Demo Walkthrough](https://youtu.be/idOJYh6TUC8)** — 2-3 min walkthrough of the full circuit discovery → quarantine → re-run loop
-
-**[Product Demo](https://youtu.be/b78Y7RwvYeU)** — Live run showing active heads, lineage, and quarantine enforcement
-
-</div>
-
----
-
-## The Problem
-
-LLMs are powerful but opaque. Current observability stops at prompts, tokens, latency, and logs. They don't answer:
-
-- *Which layers and heads were most active for this response?*
-- *Can we trace a "thought path" through the network in a way operators can inspect?*
-- *Can governance tools intervene on specific neural components?*
-
-## The Solution
-
-Synapse-Graph repurposes **OpenMetadata** as a governance and lineage system for transformer internals:
-
-- Model → **Database**
-- Transformer layers → **Tables**
-- Attention heads → **Columns**
-- High-activation paths → **Lineage edges**
-- `DEFECTIVE` tag → **Runtime control signal** that masks a head during next generation
-
-## The Impact
-
-Turns model internals into observable, governable infrastructure. Instead of treating neural behavior as a black box, Synapse-Graph makes it **inspectable infrastructure** with familiar data-platform primitives.
-
----
-
-## Quickstart
-
-### Prerequisites
-
-- Python `3.11` or `3.12`
-- Node.js `20+`
-- Optional: [Ollama](https://ollama.com) at `http://127.0.0.1:11434`
-- Optional: [OpenMetadata](https://openmetadata.org) at `http://127.0.0.1:8585`
-
-### 1. Backend
-
-```bash
-git clone https://github.com/FiscalMindset/Synapse-Graph.git
-cd Synapse-Graph
-
-python3.11 -m venv .venv
-source .venv/bin/activate
-
-pip install -e ./backend
-cp backend/.env.example backend/.env
-
-cd backend
-python -m uvicorn app.main:app --reload --port 8000
-```
-
-### 2. Frontend
-
-```bash
-# in a new terminal
-cd frontend
-cp .env.local.example .env.local
-npm install
-npm run dev
-```
-
-Dashboard: `http://localhost:3000`
+Live Presentation: https://fiscalmindset.github.io/Synapse-Graph/first_frame.html
+YouTube Demo: https://youtu.be/idOJYh6TUC8
+Product Demo: https://youtu.be/b78Y7RwvYeU
 
 ---
 
@@ -109,178 +12,244 @@ Dashboard: `http://localhost:3000`
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Operator Dashboard                      │
+│                    Operator Dashboard                       │
 │              Next.js + React + @xyflow/react               │
 └─────────────────────────┬───────────────────────────────────┘
-                        │ REST + SSE
+                          │ REST + SSE
 ┌─────────────────────────▼───────────────────────────────────┐
-│                  Neural Proxy (FastAPI)                     │
-│         Orchestrates generation + tracing + governance        │
-└──────┬────────────────────┬────────────────────┬────────────┘
+│                  Neural Proxy (FastAPI)                    │
+│         Orchestrates generation + tracing + governance      │
+└──────┬────────────────────┬────────────────────┬───────────┘
        │                    │                    │
        ▼                    ▼                    ▼
 ┌─────────────┐    ┌────────────────┐    ┌─────────────────┐
-│   Ollama     │    │  HF Tracer      │    │  OpenMetadata    │
-│ (Preferred) │    │ (PyTorch hooks) │    │ (Governance)     │
-│             │    │                │    │                  │
+│   Ollama     │    │  HF Tracer      │    │  OpenMetadata   │
+│ (Preferred) │    │ (PyTorch hooks) │    │  (Governance)   │
+│             │    │                │    │                 │
 │ Generation  │    │ Attention      │    │ Topology        │
-│             │    │ activation     │    │ Lineage          │
-│             │    │ capture        │    │ Tags → Masks     │
+│             │    │ activation     │    │ Lineage         │
+│             │    │ capture        │    │ Tags → Masks    │
 └─────────────┘    └────────────────┘    └─────────────────┘
 ```
 
-**Runtime flow:**
+## OpenMetadata Topology
 
-1. Operator submits prompt via dashboard
-2. Backend runs generation (Ollama preferred) + parallel HF tracing
-3. Tracer captures per-layer, per-head attention activations via `register_forward_hook`
-4. Backend ingests lineage edges into OpenMetadata
-5. Operator tags defective heads → backend converts tags to head masks
-6. Subsequent generations run with masked heads zeroed out
-
----
-
-## Tech Stack
-
-### Backend
-```toml
-# backend/pyproject.toml
-[project]
-requires-python = ">=3.11,<3.13"
-
-dependencies = [
-    "fastapi>=0.115.0",
-    "torch>=2.4.0",
-    "transformers>=4.46.0",
-    "openmetadata-ingestion>=1.12.0",
-    "httpx>=0.28.0",
-    "pydantic-settings>=2.7.0",
-    "uvicorn[standard]>=0.32.0",
-    "accelerate>=1.1.0",
-    "cachetools>=5.3.0",
-]
-```
-
-### Frontend
-```json
-{
-  "dependencies": {
-    "next": "^15.2.0",
-    "react": "^19.0.0",
-    "@xyflow/react": "^12.4.4",
-    "recharts": "^2.15.0",
-    "lucide-react": "^0.468.0"
-  }
-}
-```
-
----
-
-## Core Capabilities
-
-| Capability | Description |
-|------------|-------------|
-| **Circuit Discovery** | Ablation sweeps (single + pair) to find heads that materially change outputs |
-| **Attention Tracing** | Hook-based per-layer, per-head activation capture via PyTorch |
-| **OpenMetadata Governance** | Topology bootstrap, lineage ingestion, column-level tagging |
-| **Runtime Masking** | `DEFECTIVE` tags → head masks applied to subsequent generations |
-| **SSE Streaming** | Real-time progress updates for discovery and generation |
-| **Evidence Quality** | Scoring system for trace confidence (high/medium/low) |
-
----
-
-## API Endpoints
-
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/v1/state` | GET | Current runtime state |
-| `/api/v1/generate/stream` | POST | Stream generation with trace steps |
-| `/api/v1/autopsy/discover_circuit` | POST | Discover hallucination circuits |
-| `/api/v1/autopsy/causal` | POST | Run causal autopsy on a head |
-| `/api/v1/openmetadata/bootstrap` | POST | Bootstrap OpenMetadata catalog |
-| `/api/v1/openmetadata/sync-defects` | POST | Sync defective heads from OpenMetadata |
-| `/api/v1/openmetadata/quarantine` | POST | Quarantine heads in OpenMetadata |
-| `/api/v1/webhooks/openmetadata` | POST | Handle OpenMetadata webhooks |
-| `/api/v1/governance/local-mask` | POST | Set local head mask |
-| `/api/v1/hf/preload` | POST | Force-load HuggingFace tracer |
-
----
-
-## OpenMetadata Usage
-
-**Topology Bootstrap:**
 ```
 Service: Synapse_Neural_Service
   └── Database: {Model_Name}
         └── Schema: Transformer_Graph
-              ├── Table: Prompt_Ingress
-              ├── Table: Response_Egress
-              └── Table: Layer_N (one per layer)
-                    └── Column: Head_N (one per head)
+              ├── Table: Prompt_Ingress (columns: Prompt_Text, Token_Count)
+              ├── Table: Response_Egress (columns: Response_Text)
+              └── Table: Layer_N
+                    └── Column: Head_N (per head, FLOAT)
+
+Lineage: Prompt_Ingress → Layer_1 → ... → Layer_N → Response_Egress
 ```
 
-**Governance Loop:**
+## The Problem → Solution → Impact
+
 ```
-1. Operator tags Layer_N/Head_N as DEFECTIVE in OpenMetadata
-2. Backend calls sync-defects → reads tags
-3. HeadMaskStore updates → masks apply to next generation
-4. Masked heads zeroed via projection hooks
+┌──────────────────────────────────────────────────────────────┐
+│  PROBLEM                                                     │
+│  LLMs are powerful but opaque                                │
+│  Current observability stops at prompts, tokens, latency       │
+│  Cannot inspect which heads produced a hallucination         │
+└──────────────────────────────────────────────────────────────┘
+                              ▼
+┌──────────────────────────────────────────────────────────────┐
+│  SOLUTION                                                    │
+│  Repurpose OpenMetadata as governance plane for neural internals│
+│                                                              │
+│  Model      → Database                                        │
+│  Layer      → Table                                           │
+│  Head       → Column                                          │
+│  Activations→ Lineage edges                                    │
+│  DEFECTIVE  → Runtime control signal (head mask)                 │
+└──────────────────────────────────────────────────────────────┘
+                              ▼
+┌──────────────────────────────────────────────────────────────┐
+│  IMPACT                                                     │
+│  Answer "which heads produced this hallucination?"            │
+│  Operationalize mitigation at head level                     │
+│  Make AI interpretability an operational control plane      │
+└──────────────────────────────────────────────────────────────┘
 ```
 
----
+## Tech Stack
 
-## Repository Layout
+```
+┌─────────────────────────────────────────────────────────────┐
+│  BACKEND                                                     │
+│  Python 3.11+                                               │
+│  ├── fastapi >= 0.115.0         (HTTP API)                   │
+│  ├── torch >= 2.4.0             (Tracing engine)            │
+│  ├── transformers >= 4.46.0    (Model interface)          │
+│  ├── openmetadata-ingestion >= 1.12.0 (Metadata SDK)        │
+│  ├── httpx >= 0.28.0            (REST client)             │
+│  ├── pydantic-settings >= 2.7.0 (Config)                   │
+│  ├── uvicorn[standard] >= 0.32.0 (Server)                │
+│  └── accelerate >= 1.1.0         (HF acceleration)       │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│  FRONTEND                                                    │
+│  ├── next ^15.2.0              (Framework)                 │
+│  ├── react ^19.0.0             (UI)                       │
+│  ├── @xyflow/react ^12.4.4      (Graph visualization)      │
+│  ├── recharts ^2.15.0            (Charts)                   │
+│  └── lucide-react ^0.468.0       (Icons)                   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## Core Capabilities
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  CIRCUIT DISCOVERY                                           │
+│  ├── Single-head ablation sweeps                              │
+│  ├── Pair-head ablation sweeps (O(n²))                       │
+│  └── Causal effect scoring per head                         │
+├─────────────────────────────────────────────────────────────┤
+│  ATTENTION TRACING                                           │
+│  ├── register_forward_hook on attention modules              │
+│  ├── Per-layer, per-head activation capture                 │
+│  └── Top-K heads & positions tracking                     │
+├─────────────────────────────────────────────────────────────┤
+│  RUNTIME MASKING                                            │
+│  ├── Two-level: attention tensor + projection masking       │
+│  ├── HeadMaskStore for runtime state                       │
+│  └── DEFECTIVE tags → zeroed outputs on next generation    │
+├─────────────────────────────────────────────────────────────┤
+│  SSE STREAMING                                              │
+│  ├── Real-time trace step updates                           │
+│  ├── Discovery progress streaming                         │
+│  └── Generation with live lineage                         │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## API Endpoints
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  GENERATION                                                 │
+│  POST /api/v1/generate              Full response          │
+│  POST /api/v1/generate/stream       SSE with trace steps    │
+├─────────────────────────────────────────────────────────────┤
+│  AUTOPSY / CIRCUIT DISCOVERY                                │
+│  POST /api/v1/autopsy/discover_circuit         Main discovery │
+│  POST /api/v1/autopsy/discover_circuit/stream  SSE streaming │
+│  POST /api/v1/autopsy/causal                    Causal check  │
+├─────────────────────────────────────────────────────────────┤
+│  OPENMETADATA                                              │
+│  POST /api/v1/openmetadata/bootstrap       Bootstrap catalog│
+│  POST /api/v1/openmetadata/sync-defects  Sync tags to masks │
+│  POST /api/v1/openmetadata/quarantine   Quarantine heads  │
+│  POST /api/v1/webhooks/openmetadata    Webhook handler   │
+├─────────────────────────────────────────────────────────────┤
+│  GOVERNANCE                                               │
+│  POST /api/v1/governance/local-mask      Set head mask    │
+│  POST /api/v1/governance/clear-local-masks  Clear masks  │
+│  POST /api/v1/hf/preload                 Load HF tracer │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## Quickstart
+
+```
+# 1. Backend
+python3.11 -m venv .venv && source .venv/bin/activate
+pip install -e ./backend
+cp backend/.env.example backend/.env
+cd backend && python -m uvicorn app.main:app --reload --port 8000
+
+# 2. Frontend
+cd frontend && npm install && npm run dev
+# Dashboard: http://localhost:3000
+```
+
+## Demo Workflow
+
+```
+┌─────��───────────────────────────────────────────────────────┐
+│  1. START                                                  │
+│     Boot dashboard                                         │
+│     Verify backend: "Ollama live" or "HF fallback"          │
+├─────────────────────────────────────────────────────────────┤
+│  2. TRACE                                                  │
+│     Submit prompt                                          │
+│     Watch synapse graph light up with active edges          │
+├─────────────────────────────────────────────────────────────┤
+│  3. DISCOVER                                               │
+│     Select hallucination token                              │
+│     Run circuit discovery (single + pair ablation)          │
+├─────────────────────────────────────────────────────────────┤
+│  4. QUARANTINE                                             │
+│     Click "Quarantine" on discovered head                   │
+│     Push DEFECTIVE tags to OpenMetadata                    │
+├─────────────────────────────────────────────────────────────┤
+│  5. VERIFY                                                 │
+│     Re-run prompt                                          │
+│     Show masked heads count increase                        │
+│     Show changed output (baseline vs ablated)             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## Governance Loop
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                                                             │
+│  Operator tags Layer_N/Head_N as DEFECTIVE in OpenMetadata  │
+│                            │                               │
+│                            ▼                               │
+│  Backend reads tags via /api/v1/openmetadata/sync-defects     │
+│                            │                               │
+│                            ▼                               │
+│  HeadMaskStore updates → masks apply to next generation      │
+│                            │                               │
+│                            ▼                               │
+│  Masked heads zeroed via PyTorch projection hooks          │
+│                            │                               │
+│                            ▼                               │
+│  Observable behavior change in next generation            │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## Repo Structure
 
 ```
 Synapse-Graph/
 ├── backend/
 │   ├── app/
-│   │   ├── main.py          # FastAPI app + endpoints
+│   │   ├── main.py          # FastAPI + endpoints
 │   │   ├── inference.py     # Generation + tracing engine
 │   │   └── om_client.py    # OpenMetadata client
 │   └── tests/
 │       ├── test_quarantine.py
 │       └── test_discover_quarantine_integration.py
 ├── frontend/
-│   ├── app/                # Next.js app router
-│   ├── components/        # Dashboard, graph, charts
-│   └── lib/               # API client
-└── first_frame.html       # GitHub Pages presentation
+│   ├── app/                 # Next.js app router
+│   ├── components/          # Dashboard, graph, charts
+│   └── lib/                 # API client
+├── first_frame.html          # GitHub Pages presentation
+├── video_diagram.html       # Architecture scene
+├── tech_stack.html         # Tech stack scene
+├── video_scene.html       # Demo video scene
+├── openmetadata_usage.html # Governance scene
+├── project_status.html    # Status + gaps scene
+└── last_frame.html       # Thank you scene
 ```
 
----
+## Links
 
-## Environment Configuration
-
-```bash
-# backend/.env
-SYNAPSE_OPENMETADATA_ENABLED=true
-SYNAPSE_OPENMETADATA_HOST=http://127.0.0.1:8585
-SYNAPSE_OLLAMA_MODEL=qwen2.5:3b-instruct
-SYNAPSE_HF_MODEL_NAME=Qwen/Qwen2.5-1.5B-Instruct
-SYNAPSE_PRELOAD_SHADOW_MODEL=true
-```
+| Resource | URL |
+|----------|-----|
+| GitHub | https://github.com/FiscalMindset/Synapse-Graph |
+| Presentation | https://fiscalmindset.github.io/Synapse-Graph/first_frame.html |
+| YouTube Demo | https://youtu.be/idOJYh6TUC8 |
+| Product Demo | https://youtu.be/b78Y7RwvYeU |
 
 ---
 
-## Demo Workflow
-
-1. **Start**: Boot dashboard, verify Ollama or HF fallback
-2. **Trace**: Submit prompt → watch synapse graph light up
-3. **Discover**: Select hallucination token → run circuit discovery
-4. **Quarantine**: Tag defective head → sync to backend
-5. **Verify**: Re-run prompt → show masked heads in output
-
----
-
-## License
-
-MIT
-
----
-
-<p align="center">
-  <a href="https://github.com/FiscalMindset/Synapse-Graph">GitHub</a> ·
-  <a href="https://fiscalmindset.github.io/Synapse-Graph/first_frame.html">Presentation</a> ·
-  <a href="https://youtu.be/idOJYh6TUC8">YouTube Demo</a>
-</p>
+MIT License
