@@ -312,6 +312,7 @@ MIT
 </p>
 
 <h3 align="center">Vicky Kumar</h3>
+<p align="center" style="color:#6b8aad;font-size:14px;">algsoch</p>
 
 <p align="center">
   <a href="https://www.linkedin.com/in/algsoch">
