@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Synapse-Graph — Architecture</title>
+  <style>
+    :root {
+      --bg: #0a0f1a;
+      --card: rgba(15, 25, 45, 0.85);
+      --accent: #60d4ff;
+      --accent2: #3ee1ff;
+      --muted: #6b8aad;
+      --success: #4ade80;
+      --warning: #fbbf24;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 20px;
+      min-height: 100vh;
+      background: var(--bg);
+      font-family: system-ui, -apple-system, sans-serif;
+      color: #e6eef8;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    h1 {
+      font-size: 28px;
+      margin: 0 0 8px 0;
+      background: linear-gradient(135deg, #e6eef8, var(--accent));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .subtitle {
+      color: var(--muted);
+      font-size: 14px;
+      margin-bottom: 24px;
+    }
+    .diagram-container {
+      background: var(--card);
+      border: 1px solid rgba(62, 225, 255, 0.2);
+      border-radius: 16px;
+      padding: 32px;
+      max-width: 900px;
+      width: 100%;
+      backdrop-filter: blur(20px);
+    }
+    svg {
+      width: 100%;
+      height: auto;
+      max-height: 70vh;
+    }
+    .node {
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+    .node:hover rect {
+      stroke: var(--accent2);
+      stroke-width: 3;
+      filter: drop-shadow(0 0 12px rgba(62, 225, 255, 0.4));
+    }
+    .node:hover .node-icon {
+      transform: scale(1.1);
+    }
+    .node-icon {
+      transition: transform 0.3s ease;
+    }
+    .node rect {
+      transition: all 0.3s ease;
+    }
+    .info-panel {
+      background: rgba(0, 20, 40, 0.6);
+      border: 1px solid rgba(62, 225, 255, 0.15);
+      border-radius: 12px;
+      padding: 20px;
+      margin-top: 24px;
+      display: none;
+    }
+    .info-panel.active {
+      display: block;
+    }
+    .info-title {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--accent);
+      margin-bottom: 12px;
+    }
+    .info-desc {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.6;
+      margin-bottom: 16px;
+    }
+    .info-files {
+      background: rgba(0, 10, 20, 0.5);
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 12px;
+    }
+    .info-files code {
+      color: var(--accent2);
+    }
+    .legend {
+      display: flex;
+      gap: 24px;
+      margin-top: 20px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .legend-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 4px;
+    }
+    .legend-dot.data { background: rgba(62, 225, 255, 0.3); border: 1px solid var(--accent); }
+    .legend-dot.process { background: rgba(74, 222, 128, 0.3); border: 1px solid var(--success); }
+    .legend-dot.external { background: rgba(251, 191, 36, 0.3); border: 1px solid var(--warning); }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    .arrow-animated {
+      animation: pulse 2s infinite;
+    }
+    .close-btn {
+      float: right;
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-size: 24px;
+      cursor: pointer;
+      padding: 4px 8px;
+    }
+    .close-btn:hover { color: var(--accent); }
+    a.back {
+      color: var(--accent);
+      text-decoration: none;
+      margin-top: 20px;
+      font-size: 14px;
+    }
+    a.back:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <h1>Synapse-Graph Architecture</h1>
+  <p class="subtitle">Click on any component to see details</p>
+
+  <div class="diagram-container">
+    <svg viewBox="0 0 800 500" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <!-- Grid background -->
+      <defs>
+        <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+          <path d="M 20 0 L 0 0 0 20" fill="none" stroke="rgba(62,225,255,0.05)" stroke-width="0.5"/>
+        </pattern>
+        <filter id="glow">
+          <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+          <feMerge>
+            <feMergeNode in="coloredBlur"/>
+            <feMergeNode in="SourceGraphic"/>
+          </feMerge>
+        </filter>
+      </defs>
+      <rect width="800" height="500" fill="url(#grid)"/>
+
+      <!-- Flow arrows -->
+      <path d="M 140 120 L 280 120" stroke="var(--accent)" stroke-width="2" marker-end="url(#arrowhead)"/>
+      <path d="M 280 120 L 280 180 L 560 180" stroke="var(--accent)" stroke-width="2"/>
+      <path d="M 560 180 L 620 180" stroke="var(--accent)" stroke-width="2"/>
+      <path d="M 140 250 L 280 250" stroke="var(--accent)" stroke-width="2"/>
+      <path d="M 280 250 L 280 320 L 160 320" stroke="var(--accent)" stroke-width="2"/>
+      <path d="M 640 120 L 720 120" stroke="var(--accent)" stroke-width="2"/>
+      <path d="M 160 320 L 160 400" stroke="var(--success)" stroke-width="2" class="arrow-animated"/>
+      <path d="M 560 320 L 560 400" stroke="var(--success)" stroke-width="2" class="arrow-animated"/>
+      <path d="M 360 320 L 360 400" stroke="var(--success)" stroke-width="2" class="arrow-animated"/>
+
+      <!-- Arrow markers -->
+      <defs>
+        <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="var(--accent)"/>
+        </marker>
+      </defs>
+
+      <!-- Dashboard Node -->
+      <g class="node" onclick="showInfo('dashboard')">
+        <rect x="20" y="60" width="120" height="120" rx="12" fill="rgba(62,225,255,0.1)" stroke="var(--accent)" stroke-width="2"/>
+        <text x="80" y="92" text-anchor="middle" fill="var(--accent)" font-size="11" font-weight="600">OPERATOR</text>
+        <text x="80" y="108" text-anchor="middle" fill="#e6eef8" font-size="13" font-weight="700">Dashboard</text>
+        <text x="80" y="126" text-anchor="middle" fill="var(--muted)" font-size="10">Next.js + React</text>
+        <text x="80" y="142" text-anchor="middle" fill="var(--muted)" font-size="10">@xyflow/react</text>
+        <text x="80" y="158" text-anchor="middle" fill="var(--muted)" font-size="10">Recharts</text>
+        <g class="node-icon" transform="translate(68, 64)">
+          <rect width="24" height="24" rx="4" fill="rgba(62,225,255,0.2)"/>
+          <text x="12" y="17" text-anchor="middle" font-size="14">🎨</text>
+        </g>
+      </g>
+
+      <!-- Neural Proxy Node -->
+      <g class="node" onclick="showInfo('proxy')">
+        <rect x="280" y="60" width="240" height="120" rx="12" fill="rgba(62,225,255,0.15)" stroke="var(--accent)" stroke-width="2" filter="url(#glow)"/>
+        <text x="400" y="92" text-anchor="middle" fill="var(--accent)" font-size="11" font-weight="600">NEURAL PROXY</text>
+        <text x="400" y="112" text-anchor="middle" fill="#e6eef8" font-size="15" font-weight="700">FastAPI Runtime</text>
+        <text x="400" y="132" text-anchor="middle" fill="var(--muted)" font-size="10">Orchestrates generation</text>
+        <text x="400" y="148" text-anchor="middle" fill="var(--muted)" font-size="10">tracing + governance</text>
+        <text x="400" y="164" text-anchor="middle" fill="var(--muted)" font-size="10">SSE streaming</text>
+        <g class="node-icon" transform="translate(388, 64)">
+          <rect width="24" height="24" rx="4" fill="rgba(62,225,255,0.3)"/>
+          <text x="12" y="17" text-anchor="middle" font-size="14">⚡</text>
+        </g>
+      </g>
+
+      <!-- Ollama Node -->
+      <g class="node" onclick="showInfo('ollama')">
+        <rect x="20" y="200" width="120" height="80" rx="10" fill="rgba(74,222,128,0.1)" stroke="var(--success)" stroke-width="2"/>
+        <text x="80" y="228" text-anchor="middle" fill="var(--success)" font-size="11" font-weight="600">GENERATION</text>
+        <text x="80" y="248" text-anchor="middle" fill="#e6eef8" font-size="13" font-weight="700">Ollama</text>
+        <text x="80" y="266" text-anchor="middle" fill="var(--muted)" font-size="10">Local LLM</text>
+        <g class="node-icon" transform="translate(68, 204)">
+          <rect width="24" height="24" rx="4" fill="rgba(74,222,128,0.2)"/>
+          <text x="12" y="17" text-anchor="middle" font-size="14">🔥</text>
+        </g>
+      </g>
+
+      <!-- HF Tracer Node -->
+      <g class="node" onclick="showInfo('tracer')">
+        <rect x="280" y="200" width="120" height="80" rx="10" fill="rgba(62,225,255,0.1)" stroke="var(--accent)" stroke-width="2"/>
+        <text x="340" y="228" text-anchor="middle" fill="var(--accent)" font-size="11" font-weight="600">TRACING</text>
+        <text x="340" y="248" text-anchor="middle" fill="#e6eef8" font-size="13" font-weight="700">HF Tracer</text>
+        <text x="340" y="266" text-anchor="middle" fill="var(--muted)" font-size="10">PyTorch hooks</text>
+        <g class="node-icon" transform="translate(328, 204)">
+          <rect width="24" height="24" rx="4" fill="rgba(62,225,255,0.2)"/>
+          <text x="12" y="17" text-anchor="middle" font-size="14">🔍</text>
+        </g>
+      </g>
+
+      <!-- OpenMetadata Node -->
+      <g class="node" onclick="showInfo('openmetadata')">
+        <rect x="540" y="200" width="120" height="80" rx="10" fill="rgba(251,191,36,0.1)" stroke="var(--warning)" stroke-width="2"/>
+        <text x="600" y="228" text-anchor="middle" fill="var(--warning)" font-size="11" font-weight="600">GOVERNANCE</text>
+        <text x="600" y="248" text-anchor="middle" fill="#e6eef8" font-size="13" font-weight="700">OpenMetadata</text>
+        <text x="600" y="266" text-anchor="middle" fill="var(--muted)" font-size="10">Topology + Lineage</text>
+        <g class="node-icon" transform="translate(588, 204)">
+          <rect width="24" height="24" rx="4" fill="rgba(251,191,36,0.2)"/>
+          <text x="12" y="17" text-anchor="middle" font-size="14">🛡️</text>
+        </g>
+      </g>
+
+      <!-- HeadMaskStore -->
+      <g class="node" onclick="showInfo('maskstore')">
+        <rect x="440" y="200" width="80" height="80" rx="10" fill="rgba(62,225,255,0.15)" stroke="var(--accent2)" stroke-width="2"/>
+        <text x="480" y="228" text-anchor="middle" fill="var(--accent2)" font-size="10" font-weight="600">MASKING</text>
+        <text x="480" y="248" text-anchor="middle" fill="#e6eef8" font-size="11" font-weight="700">HeadMask</text>
+        <text x="480" y="266" text-anchor="middle" fill="#e6eef8" font-size="11" font-weight="700">Store</text>
+        <g class="node-icon" transform="translate(468, 204)">
+          <rect width="24" height="24" rx="4" fill="rgba(62,225,255,0.3)"/>
+          <text x="12" y="17" text-anchor="middle" font-size="14">🎭</text>
+        </g>
+      </g>
+
+      <!-- Layer Tables -->
+      <g class="node" onclick="showInfo('layers')">
+        <rect x="40" y="340" width="120" height="60" rx="8" fill="rgba(62,225,255,0.1)" stroke="var(--accent)" stroke-width="1.5"/>
+        <text x="100" y="368" text-anchor="middle" fill="var(--accent)" font-size="11" font-weight="600">Tables</text>
+        <text x="100" y="386" text-anchor="middle" fill="var(--muted)" font-size="10">one per layer</text>
+      </g>
+
+      <!-- Head Columns -->
+      <g class="node" onclick="showInfo('heads')">
+        <rect x="240" y="340" width="120" height="60" rx="8" fill="rgba(62,225,255,0.1)" stroke="var(--accent)" stroke-width="1.5"/>
+        <text x="300" y="368" text-anchor="middle" fill="var(--accent)" font-size="11" font-weight="600">Columns</text>
+        <text x="300" y="386" text-anchor="middle" fill="var(--muted)" font-size="10">one per head</text>
+      </g>
+
+      <!-- Lineage Edges -->
+      <g class="node" onclick="showInfo('lineage')">
+        <rect x="440" y="340" width="120" height="60" rx="8" fill="rgba(62,225,255,0.1)" stroke="var(--accent)" stroke-width="1.5"/>
+        <text x="500" y="368" text-anchor="middle" fill="var(--accent)" font-size="11" font-weight="600">Lineage Edges</text>
+        <text x="500" y="386" text-anchor="middle" fill="var(--muted)" font-size="10">prompt→layer→head</text>
+      </g>
+
+      <!-- DEFECTIVE tag -->
+      <g class="node" onclick="showInfo('defective')">
+        <rect x="640" y="60" width="120" height="60" rx="8" fill="rgba(239,68,68,0.15)" stroke="#ef4444" stroke-width="2"/>
+        <text x="700" y="88" text-anchor="middle" fill="#ef4444" font-size="11" font-weight="700">DEFECTIVE</text>
+        <text x="700" y="106" text-anchor="middle" fill="var(--muted)" font-size="10">→ Runtime Mask</text>
+      </g>
+
+      <!-- Labels -->
+      <text x="400" y="490" text-anchor="middle" fill="var(--muted)" font-size="10">Click any component to explore</text>
+    </svg>
+
+    <div class="legend">
+      <div class="legend-item">
+        <div class="legend-dot data"></div>
+        <span>Data / UI</span>
+      </div>
+      <div class="legend-item">
+        <div class="legend-dot process"></div>
+        <span>Generation</span>
+      </div>
+      <div class="legend-item">
+        <div class="legend-dot external"></div>
+        <span>External Service</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="info-panel" id="infoPanel">
+    <button class="close-btn" onclick="hideInfo()">×</button>
+    <div class="info-title" id="infoTitle"></div>
+    <div class="info-desc" id="infoDesc"></div>
+    <div class="info-files" id="infoFiles"></div>
+  </div>
+
+  <a class="back" href="https://fiscalmindset.github.io/Synapse-Graph/first_frame.html">← Back to Presentation</a>
+
+  <script>
+    const componentInfo = {
+      dashboard: {
+        title: "🎨 Operator Dashboard",
+        desc: "Next.js 15 + React 19 dashboard for visualizing neural activity. Uses @xyflow/react for synapse graph visualization and Recharts for activation charts. Streams responses via SSE and displays real-time trace steps.",
+        files: "<code>frontend/components/synapse-dashboard.tsx</code> — Main dashboard with prompt console, logs, metrics<br><code>frontend/components/synapse-graph.tsx</code> — @xyflow/react graph with layer/head nodes<br><code>frontend/components/activation-chart.tsx</code> — Per-layer, per-head activation charts<br><code>frontend/components/console-log.tsx</code> — Real-time log stream display"
+      },
+      proxy: {
+        title: "⚡ Neural Proxy (FastAPI)",
+        desc: "FastAPI runtime orchestrating generation, hook-based tracing, and OpenMetadata governance. Handles SSE streaming for real-time updates. Manages HeadMaskStore for runtime state.",
+        files: "<code>backend/app/main.py</code> — FastAPI app with all REST/SSE endpoints<br><code>backend/app/inference.py</code> — Generation engine + PyTorch tracer<br><code>backend/app/om_client.py</code> — OpenMetadata client"
+      },
+      ollama: {
+        title: "🔥 Ollama (Preferred Generation)",
+        desc: "Local LLM via HTTP API. Used as primary generator when available at http://127.0.0.1:11434. Falls back to HuggingFace if Ollama is not running.",
+        files: "Config: <code>SYNAPSE_OLLAMA_MODEL=qwen2.5:3b-instruct</code><br>Endpoint: POST to /api/generate with stream=true"
+      },
+      tracer: {
+        title: "🔍 HuggingFace PyTorch Tracer",
+        desc: "Hook-based attention tracer using register_forward_hook. Captures per-layer, per-head activations including max_attention_score, mean_attention_score, l2_norm, and top source positions/tokens.",
+        files: "<code>backend/app/inference.py</code><br>_register_attention_hooks() — Hook registration<br>_make_projection_mask_hook() — Applies masking<br>AttentionTrace dataclass — Captured activations"
+      },
+      openmetadata: {
+        title: "🛡️ OpenMetadata (Governance Plane)",
+        desc: "Topology bootstrap creates synthetic entities (Service → Database → Schema → Tables → Columns). Lineage ingestion adds edges. Column-level tagging for DEFECTIVE heads.",
+        files: "<code>backend/app/om_client.py</code><br>Creates: Service, Database, Schema, Tables, Columns<br>Classification: SynapseQuarantine<br>Tag: DEFECTIVE (color: #39FF14)"
+      },
+      maskstore: {
+        title: "🎭 HeadMaskStore (Runtime State)",
+        desc: "In-memory store for masked heads. Masks apply at two levels: attention tensor masking and projection masking. Applied per-layer via _TraceSession state object.",
+        files: "<code>backend/app/inference.py</code><br>HeadMask dataclass — layer_index, head_index<br>set_masked_heads() — Apply masks<br>Masks: attention tensor + projection"
+      },
+      layers: {
+        title: "📊 OpenMetadata Layer Tables",
+        desc: "One table per transformer layer. Created during topology bootstrap. Contains columns for each attention head with FLOAT data type.",
+        files: "Table name: Layer_N (e.g., Layer_0, Layer_1)<br>Columns: Head_1 through Head_N (FLOAT)<br>Created via om_client.py"
+      },
+      heads: {
+        title: "📋 OpenMetadata Head Columns",
+        desc: "One column per attention head. Column-level tagging allows fine-grained governance. Falls back to table-level tagging if column ops fail.",
+        files: "Column name: Head_N (e.g., Head_0, Head_1)<br>DataType: FLOAT<br>Tagged as DEFECTIVE for quarantine"
+      },
+      lineage: {
+        title: "🔗 Lineage Edges",
+        desc: "Dynamic lineage ingestion: Prompt_Ingress → Layer_1 → ... → Layer_N → Response_Egress. Only top 2 active heads per layer included.",
+        files: "Created via metadata.add_lineage()<br>Stores activation path in SQL query field<br>Prompt → Layer → Head → Token tracking"
+      },
+      defective: {
+        title: "⛔ DEFECTIVE Tag → Runtime Mask",
+        desc: "Operators tag Layer_N/Head_N as DEFECTIVE in OpenMetadata. Backend reads tags via sync-defects endpoint, HeadMaskStore updates, masks apply to next generation.",
+        files: "Flow: Tag in OM → /sync-defects → HeadMaskStore → projection hooks → zeroed output"
+      }
+    };
+
+    function showInfo(key) {
+      const info = componentInfo[key];
+      document.getElementById('infoTitle').textContent = info.title;
+      document.getElementById('infoDesc').textContent = info.desc;
+      document.getElementById('infoFiles').innerHTML = info.files;
+      document.getElementById('infoPanel').classList.add('active');
+    }
+
+    function hideInfo() {
+      document.getElementById('infoPanel').classList.remove('active');
+    }
+  </script>
+</body>
+</html>
