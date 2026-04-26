@@ -180,17 +180,142 @@ export async function postDiscoverCircuit(
 export async function postQuarantineCircuit(
   payload: import("./types").QuarantineRequest,
 ): Promise<import("./types").OpenMetadataWebhookResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/v1/openmetadata/quarantine`, {
+  const controller = new AbortController();
+  const timeoutMs = 15000; // 15s timeout for quick UI feedback
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/v1/openmetadata/quarantine`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Quarantine request failed: ${response.status}`);
+    }
+
+    return (await response.json()) as import("./types").OpenMetadataWebhookResponse;
+  } catch (err: any) {
+    if (err?.name === "AbortError") {
+      throw new Error("Quarantine request timed out");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function streamDiscoverCircuit(
+  payload: import("./types").CircuitDiscoveryRequest,
+  handlers: {
+    onProgress?: (data: any) => void;
+    onSweepStart?: (data: any) => void;
+    onSweepDone?: (data: any) => void;
+    onDone?: (data: any) => void;
+    onError?: (data: any) => void;
+  },
+): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/autopsy/discover_circuit/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
 
-  if (!response.ok) {
-    throw new Error(`Quarantine request failed: ${response.status}`);
+  if (!response.ok || !response.body) {
+    throw new Error(`Discover stream failed: ${response.status}`);
   }
 
-  return (await response.json()) as import("./types").OpenMetadataWebhookResponse;
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const chunks = buffer.split("\n\n");
+    buffer = chunks.pop() ?? "";
+    for (const chunk of chunks) {
+      const parsed = parseEventChunk(chunk);
+      if (!parsed) continue;
+      try {
+        switch (parsed.event) {
+          case "progress":
+            handlers.onProgress?.(parsed.data);
+            break;
+          case "sweep_start":
+            handlers.onSweepStart?.(parsed.data);
+            break;
+          case "sweep_done":
+            handlers.onSweepDone?.(parsed.data);
+            break;
+          case "done":
+            handlers.onDone?.(parsed.data);
+            break;
+          case "error":
+            handlers.onError?.(parsed.data);
+            break;
+          default:
+            break;
+        }
+      } catch (e) {
+        handlers.onError?.({ message: String(e) });
+      }
+    }
+  }
+}
+
+export async function streamQuarantineCircuit(
+  payload: import("./types").QuarantineRequest,
+  handlers: {
+    onProgress?: (data: any) => void;
+    onDone?: (data: any) => void;
+    onError?: (data: any) => void;
+  },
+): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/openmetadata/quarantine/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok || !response.body) {
+    throw new Error(`Quarantine stream failed: ${response.status}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const chunks = buffer.split("\n\n");
+    buffer = chunks.pop() ?? "";
+    for (const chunk of chunks) {
+      const parsed = parseEventChunk(chunk);
+      if (!parsed) continue;
+      try {
+        switch (parsed.event) {
+          case "progress":
+            handlers.onProgress?.(parsed.data);
+            break;
+          case "done":
+            handlers.onDone?.(parsed.data);
+            break;
+          case "error":
+            handlers.onError?.(parsed.data);
+            break;
+          default:
+            break;
+        }
+      } catch (e) {
+        handlers.onError?.({ message: String(e) });
+      }
+    }
+  }
 }
 
 function parseEventChunk(chunk: string): { event: string; data: unknown } | null {

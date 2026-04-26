@@ -99,6 +99,18 @@ body {
   --xy-edge-label-color: #d9ffd1;
 }
 
+/* Synapse visualizer header: keep it visually distinct and occupying space
+   so the ReactFlow canvas cannot be panned 'under' it. The layout uses a
+   flex column so the flow fills the remaining height. */
+.synapse-graph-header {
+  background: linear-gradient(180deg, rgba(19, 20, 24, 0.92), rgba(13, 14, 18, 0.92));
+}
+
+/* React Flow controls should sit above the canvas but beneath any UI chrome. */
+.react-flow__controls {
+  z-index: 20;
+}
+
 .synapse-flow .react-flow__edge-textwrapper {
   filter: drop-shadow(0 0 10px rgba(0, 0, 0, 0.45));
 }

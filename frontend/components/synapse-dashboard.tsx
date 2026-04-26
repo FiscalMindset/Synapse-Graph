@@ -12,6 +12,8 @@ import {
   preloadHF,
   postDiscoverCircuit,
   postQuarantineCircuit,
+  streamDiscoverCircuit,
+  streamQuarantineCircuit,
   setLocalHeadMask,
   streamGeneration,
   syncOpenMetadataDefects,
@@ -81,6 +83,28 @@ export function SynapseDashboard() {
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [isQuarantining, setIsQuarantining] = useState(false);
+  const [isDiscovering, setIsDiscovering] = useState(false);
+  const [discoverIdx, setDiscoverIdx] = useState<number>(0);
+  const [discoverTotal, setDiscoverTotal] = useState<number>(0);
+  const [quarantineIdx, setQuarantineIdx] = useState<number>(0);
+  const [quarantineTotal, setQuarantineTotal] = useState<number>(0);
+  const [discoverTopK, setDiscoverTopK] = useState<number>(3);
+  const [discoverPairSweeps, setDiscoverPairSweeps] = useState<number>(3);
+
+  function appendLog(channel: string, message: string, detail?: string) {
+    setLogs((current) => {
+      const nextEntry: LogEntry = {
+        id: crypto.randomUUID(),
+        channel,
+        message,
+        detail,
+        createdAt: new Date().toLocaleTimeString(),
+      };
+
+      return [nextEntry, ...current].slice(0, 48);
+    });
+  }
 
   const deferredTrace = useDeferredValue(trace);
   const topology = state?.topology ?? null;
@@ -227,31 +251,73 @@ export function SynapseDashboard() {
   }
 
   async function handleDiscoverCircuit() {
+    console.debug("handleDiscoverCircuit invoked");
     setError(null);
     appendLog("DISCOVERY", "Starting circuit discovery sweep.");
-    try {
-        const req: import("@/lib/types").CircuitDiscoveryRequest = {
-          prompt,
-          target_hallucination_token: targetToken || (prompt.split(" ").at(-1) ?? ""),
-          trace_model_name: traceModelName,
-          max_new_tokens: maxNewTokens,
-          top_k_heads: 6,
-          max_pair_sweeps: 12,
-        };
+    setIsDiscovering(true);
+    const req: import("@/lib/types").CircuitDiscoveryRequest = {
+      prompt,
+      target_hallucination_token: targetToken || (prompt.split(" ").at(-1) ?? ""),
+      trace_model_name: traceModelName,
+      max_new_tokens: maxNewTokens,
+      // Use interactive values from UI controls
+      top_k_heads: discoverTopK,
+      max_pair_sweeps: discoverPairSweeps,
+    };
 
-      const result = await postDiscoverCircuit(req);
-      setDiscovery(result);
-      setOverlayTrace(null);
-      appendLog("DISCOVERY", `Discovery completed with ${result.sweep_results.length} sweep results.`);
-    } catch (discError) {
-      const message = discError instanceof Error ? discError.message : "Discovery failed.";
+    try {
+      await streamDiscoverCircuit(req, {
+        onProgress: (data) => {
+          appendLog("DISCOVERY", data?.message ?? JSON.stringify(data));
+          if (data?.message === "running_sweeps" && typeof data.count === "number") {
+            setDiscoverTotal(data.count);
+            setDiscoverIdx(0);
+          }
+          if (data?.message === "baseline_generation_done") {
+            setDiscoverIdx(0);
+          }
+        },
+        onSweepStart: (data) => {
+          setDiscoverIdx(typeof data.idx === "number" ? data.idx : 0);
+          setDiscoverTotal(typeof data.total === "number" ? data.total : 0);
+          appendLog("DISCOVERY", `Sweep ${data.idx}/${data.total} starting: ${JSON.stringify(data.masks)}`);
+        },
+        onSweepDone: (data) => {
+          setDiscoverIdx(typeof data.idx === "number" ? data.idx : 0);
+          appendLog("DISCOVERY", `Sweep ${data.idx} done: target_count=${data.target_count} duration=${data.duration?.toFixed?.(3) ?? data.duration}`);
+        },
+        onDone: (data) => {
+          try {
+            const payload = typeof data.response === "string" ? JSON.parse(data.response) : data.response;
+            setDiscovery(payload as import("@/lib/types").CircuitDiscoveryResponse);
+            setOverlayTrace(null);
+            appendLog("DISCOVERY", `Discovery completed with ${payload.sweep_results?.length ?? 0} sweeps.`);
+          } catch (e) {
+            appendLog("ERROR", "Failed to parse discovery result.", String(e));
+          }
+          setIsDiscovering(false);
+          setDiscoverIdx(0);
+          setDiscoverTotal(0);
+        },
+        onError: (err) => {
+          appendLog("ERROR", "Discovery stream error.", err?.message ?? JSON.stringify(err));
+          setError(err?.message ?? "Discovery failed.");
+          setIsDiscovering(false);
+          setDiscoverIdx(0);
+          setDiscoverTotal(0);
+        },
+      });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
       setError(message);
-      appendLog("ERROR", "Circuit discovery failed.", message);
+      appendLog("ERROR", "Discovery failed.", message);
+      setIsDiscovering(false);
     }
   }
 
   async function handleViewSweepResult(index: number) {
     if (!discovery) return;
+    console.debug(`handleViewSweepResult invoked for index=${index}`);
     const sweep = discovery.sweep_results[index];
     setOverlayTrace(sweep.trace ?? null);
     appendLog("DISCOVERY", `Showing overlay for sweep #${index + 1} (effect ${sweep.causal_effect_score}).`);
@@ -259,35 +325,154 @@ export function SynapseDashboard() {
 
   async function handleQuarantineSweepResult(index: number) {
     if (!discovery) return;
+    console.debug(`handleQuarantineSweepResult invoked for index=${index}`);
     const sweep = discovery.sweep_results[index];
     try {
       const payload: import("@/lib/types").QuarantineRequest = {
         heads: sweep.masked_heads,
         reason: `sweep_${index + 1}`,
       };
-      const resp = await postQuarantineCircuit(payload);
-      appendLog("QUARANTINE", resp.reason);
-      const refreshed = await fetchState();
-      setState(refreshed);
+
+      setIsQuarantining(true);
+      appendLog("QUARANTINE", `Starting quarantine for sweep #${index + 1}`);
+      await streamQuarantineCircuit(payload, {
+        onProgress: (data) => {
+          appendLog("QUARANTINE", data?.message ?? JSON.stringify(data));
+          if (data?.message === "quarantine_start" && typeof data.total === "number") {
+            setQuarantineTotal(data.total);
+            setQuarantineIdx(0);
+          }
+          if ((data?.message === "quarantine_pair_start" || data?.message === "quarantine_pair_done") && typeof data.idx === "number") {
+            setQuarantineIdx(data.idx);
+            if (typeof data.total === "number") setQuarantineTotal(data.total);
+          }
+        },
+        onDone: (data) => {
+          appendLog("QUARANTINE", data?.reason ?? "Quarantine completed");
+          // Attempt to apply server-provided masked heads into UI immediately
+          try {
+            const parsed = {
+              parsed_heads: Array.isArray(data.parsed_heads) ? data.parsed_heads.map((p: any) => (typeof p === "string" ? JSON.parse(p) : p)) : [],
+              masked_heads: Array.isArray(data.masked_heads) ? data.masked_heads.map((m: any) => (typeof m === "string" ? JSON.parse(m) : m)) : [],
+            };
+            setState((current) => {
+              const currTopology = current?.topology ?? null;
+              const nextState = current ?? emptyState(currTopology);
+              return {
+                ...nextState,
+                masked_heads: parsed.masked_heads ?? nextState.masked_heads,
+                openmetadata: {
+                  ...nextState.openmetadata,
+                  defective_heads: parsed.parsed_heads ?? nextState.openmetadata.defective_heads,
+                  connected: true,
+                },
+              };
+            });
+          } catch (e) {
+            console.debug("Failed to apply quarantine done payload to UI", e);
+          }
+
+          // Try canonical refresh
+          void (async () => {
+            try {
+              const refreshed = await fetchState();
+              setState(refreshed);
+            } catch (e) {
+              console.debug("fetchState after stream quarantine failed", e);
+            }
+          })();
+
+          setTimeout(() => {
+            document.getElementById("governance-panel")?.scrollIntoView({ behavior: "smooth", block: "center" });
+          }, 80);
+          setIsQuarantining(false);
+        },
+        onError: (err) => {
+          appendLog("ERROR", "Quarantine stream error.", err?.message ?? JSON.stringify(err));
+          setIsQuarantining(false);
+          setQuarantineIdx(0);
+          setQuarantineTotal(0);
+        },
+      });
     } catch (err) {
       appendLog("ERROR", "Quarantine sweep failed.", err instanceof Error ? err.message : String(err));
+      setIsQuarantining(false);
     }
   }
 
   async function handleQuarantineDiscoveredCircuit() {
+    console.debug("handleQuarantineDiscoveredCircuit invoked");
     if (!discovery) return;
+    setIsQuarantining(true);
+    appendLog("QUARANTINE", "Dispatching quarantine to OpenMetadata...");
+    const payload: import("@/lib/types").QuarantineRequest = {
+      heads: discovery.discovered_circuit,
+      reason: "discovered_via_ui",
+    };
+
     try {
-      const payload: import("@/lib/types").QuarantineRequest = {
-        heads: discovery.discovered_circuit,
-        reason: "discovered_via_ui",
-      };
-      const resp = await postQuarantineCircuit(payload);
-      appendLog("QUARANTINE", resp.reason);
-      // refresh global state
-      const refreshed = await fetchState();
-      setState(refreshed);
+      await streamQuarantineCircuit(payload, {
+        onProgress: (data) => {
+          appendLog("QUARANTINE", data?.message ?? JSON.stringify(data));
+          if (data?.message === "quarantine_start" && typeof data.total === "number") {
+            setQuarantineTotal(data.total);
+            setQuarantineIdx(0);
+          }
+          if ((data?.message === "quarantine_pair_start" || data?.message === "quarantine_pair_done") && typeof data.idx === "number") {
+            setQuarantineIdx(data.idx);
+            if (typeof data.total === "number") setQuarantineTotal(data.total);
+          }
+        },
+        onDone: (data) => {
+          appendLog("QUARANTINE", data?.reason ?? "Quarantine completed");
+          try {
+            const parsed = {
+              parsed_heads: Array.isArray(data.parsed_heads) ? data.parsed_heads.map((p: any) => (typeof p === "string" ? JSON.parse(p) : p)) : [],
+              masked_heads: Array.isArray(data.masked_heads) ? data.masked_heads.map((m: any) => (typeof m === "string" ? JSON.parse(m) : m)) : [],
+            };
+            setState((current) => {
+              const currTopology = current?.topology ?? null;
+              const nextState = current ?? emptyState(currTopology);
+              return {
+                ...nextState,
+                masked_heads: parsed.masked_heads ?? nextState.masked_heads,
+                openmetadata: {
+                  ...nextState.openmetadata,
+                  defective_heads: parsed.parsed_heads ?? nextState.openmetadata.defective_heads,
+                  connected: true,
+                },
+              };
+            });
+          } catch (e) {
+            console.debug("Failed to apply quarantine done payload to UI", e);
+          }
+
+          void (async () => {
+            try {
+              const refreshed = await fetchState();
+              setState(refreshed);
+            } catch (e) {
+              console.debug("fetchState after stream quarantine failed", e);
+            }
+          })();
+
+          setTimeout(() => {
+            document.getElementById("governance-panel")?.scrollIntoView({ behavior: "smooth", block: "center" });
+          }, 80);
+          setIsQuarantining(false);
+          setQuarantineIdx(0);
+          setQuarantineTotal(0);
+        },
+        onError: (err) => {
+          appendLog("ERROR", "Quarantine stream error.", err?.message ?? JSON.stringify(err));
+          setIsQuarantining(false);
+          setQuarantineIdx(0);
+          setQuarantineTotal(0);
+        },
+      });
     } catch (qErr) {
       appendLog("ERROR", "Quarantine failed.", qErr instanceof Error ? qErr.message : String(qErr));
+      setIsQuarantining(false);
     }
   }
 
@@ -598,10 +783,36 @@ export function SynapseDashboard() {
                   <button
                     type="button"
                     onClick={() => void handleDiscoverCircuit()}
-                    className="rounded-sm border border-accent bg-accent/12 px-3 py-2 text-xs text-accent"
+                    disabled={isDiscovering}
+                    className="rounded-sm border border-accent bg-accent/12 px-3 py-2 text-xs text-accent disabled:cursor-not-allowed disabled:border-line disabled:bg-panel2 disabled:text-muted"
                   >
-                    Run Discovery
+                    {isDiscovering
+                      ? discoverTotal > 0
+                        ? `Discovering ${discoverIdx}/${discoverTotal}`
+                        : "Discovering..."
+                      : "Run Discovery"}
                   </button>
+                </div>
+
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    max={20}
+                    placeholder="top_k_heads"
+                    className="rounded-sm border border-line bg-panel px-3 py-2 text-sm text-zinc-100 outline-none"
+                    value={discoverTopK}
+                    onChange={(e) => setDiscoverTopK(clampNumber(Number(e.target.value || 0), 1, 20))}
+                  />
+                  <input
+                    type="number"
+                    min={0}
+                    max={190}
+                    placeholder="max_pair_sweeps"
+                    className="rounded-sm border border-line bg-panel px-3 py-2 text-sm text-zinc-100 outline-none"
+                    value={discoverPairSweeps}
+                    onChange={(e) => setDiscoverPairSweeps(clampNumber(Number(e.target.value || 0), 0, 190))}
+                  />
                 </div>
 
                 {discovery ? (
@@ -628,7 +839,17 @@ export function SynapseDashboard() {
                             </div>
                             <div className="flex gap-2">
                               <button className="rounded-sm border border-line px-2 py-1 text-xs" onClick={() => void handleViewSweepResult(i)}>View Overlay</button>
-                              <button className="rounded-sm border border-rose-500 px-2 py-1 text-xs text-rose-300" onClick={() => void handleQuarantineSweepResult(i)}>Quarantine Sweep</button>
+                              <button
+                                className="rounded-sm border border-rose-500 px-2 py-1 text-xs text-rose-300"
+                                onClick={() => void handleQuarantineSweepResult(i)}
+                                disabled={isQuarantining}
+                              >
+                                {isQuarantining
+                                  ? quarantineTotal > 0
+                                    ? `Quarantining ${quarantineIdx}/${quarantineTotal}`
+                                    : "Quarantining..."
+                                  : "Quarantine Sweep"}
+                              </button>
                             </div>
                           </div>
                         </div>
@@ -636,7 +857,18 @@ export function SynapseDashboard() {
                     </div>
 
                     <div className="mt-2 flex gap-2">
-                      <button type="button" onClick={() => void handleQuarantineDiscoveredCircuit()} className="rounded-sm border border-rose-500 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">QUARANTINE CIRCUIT IN OPENMETADATA</button>
+                              <button
+                                type="button"
+                                onClick={() => void handleQuarantineDiscoveredCircuit()}
+                                disabled={isQuarantining}
+                                className="rounded-sm border border-rose-500 bg-rose-500/10 px-3 py-2 text-xs text-rose-300 disabled:cursor-not-allowed disabled:border-line disabled:bg-panel2 disabled:text-muted"
+                              >
+                                {isQuarantining
+                                  ? quarantineTotal > 0
+                                    ? `Quarantining ${quarantineIdx}/${quarantineTotal}`
+                                    : "Quarantining..."
+                                  : "QUARANTINE CIRCUIT IN OPENMETADATA"}
+                              </button>
                     </div>
                   </div>
                 ) : null}
@@ -659,19 +891,6 @@ export function SynapseDashboard() {
     </main>
   );
 
-  function appendLog(channel: string, message: string, detail?: string) {
-    setLogs((current) => {
-      const nextEntry: LogEntry = {
-        id: crypto.randomUUID(),
-        channel,
-        message,
-        detail,
-        createdAt: new Date().toLocaleTimeString(),
-      };
-
-      return [nextEntry, ...current].slice(0, 48);
-    });
-  }
 }
 
 function MetricCard({
@@ -707,7 +926,7 @@ function ResponsePanel({
   error: string | null;
 }) {
   return (
-    <div className="panel-shell rounded-sm p-4">
+    <div id="governance-panel" className="panel-shell rounded-sm p-4">
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="panel-label">Response Stream</p>

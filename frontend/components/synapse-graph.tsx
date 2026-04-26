@@ -36,10 +36,11 @@ export function SynapseGraph({
   overlayTrace,
 }: SynapseGraphProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const flowRef = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState({ width: 1200, height: 720 });
 
   useEffect(() => {
-    const el = containerRef.current;
+    const el = flowRef.current ?? containerRef.current;
     if (!el) return;
     const ro = new ResizeObserver((entries) => {
       const r = entries[0];
@@ -48,6 +49,23 @@ export function SynapseGraph({
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  useEffect(() => {
+    // When an overlay trace is shown, bring the visualizer into view so users
+    // don't need to manually scroll back to the panel.
+    if (!overlayTrace) return;
+    const el = containerRef.current;
+    if (!el) return;
+    // Defer slightly to allow layout to update, then smoothly scroll.
+    const t = setTimeout(() => {
+      try {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+      } catch (e) {
+        // ignore
+      }
+    }, 60);
+    return () => clearTimeout(t);
+  }, [overlayTrace]);
 
   if (!topology) {
     return (
@@ -105,8 +123,8 @@ export function SynapseGraph({
   });
 
   return (
-    <div ref={containerRef} className="panel-shell min-h-[360px] h-[60vh] md:h-[72vh] lg:h-[80vh] overflow-auto rounded-sm">
-      <div className="border-b border-line px-4 py-3">
+    <div ref={containerRef} className="panel-shell min-h-[360px] h-[60vh] md:h-[72vh] lg:h-[80vh] flex flex-col overflow-hidden rounded-sm">
+      <div className="synapse-graph-header border-b border-line px-4 py-3">
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="panel-label">Synapse Visualizer</p>
@@ -129,26 +147,29 @@ export function SynapseGraph({
         ) : null}
       </div>
 
-      <ReactFlow<Node<SynapseNodeData>, Edge>
-        nodes={positionedNodes}
-        edges={edges}
-        nodeTypes={nodeTypes}
-        colorMode="dark"
-        className="synapse-flow"
-        fitView
-        minZoom={0.12}
-        maxZoom={1.6}
-        proOptions={{ hideAttribution: true }}
-        onNodeClick={(_, node) => {
-          const data = node.data as unknown as SynapseNodeData | undefined;
-          if (data?.kind === "layer" && typeof data.layerIndex === "number") {
-            onSelectLayer(data.layerIndex);
-          }
-        }}
-      >
-        <Background gap={28} color="rgba(57,255,20,0.06)" variant={BackgroundVariant.Dots} size={1.2} />
-        <Controls showInteractive={false} />
-      </ReactFlow>
+      <div ref={flowRef} className="flex-1 relative">
+        <ReactFlow<Node<SynapseNodeData>, Edge>
+          nodes={positionedNodes}
+          edges={edges}
+          nodeTypes={nodeTypes}
+          colorMode="dark"
+          className="synapse-flow"
+          style={{ width: "100%", height: "100%" }}
+          fitView
+          minZoom={0.12}
+          maxZoom={1.6}
+          proOptions={{ hideAttribution: true }}
+          onNodeClick={(_, node) => {
+            const data = node.data as unknown as SynapseNodeData | undefined;
+            if (data?.kind === "layer" && typeof data.layerIndex === "number") {
+              onSelectLayer(data.layerIndex);
+            }
+          }}
+        >
+          <Background gap={28} color="rgba(57,255,20,0.06)" variant={BackgroundVariant.Dots} size={1.2} />
+          <Controls showInteractive={true} />
+        </ReactFlow>
+      </div>
     </div>
   );
 }

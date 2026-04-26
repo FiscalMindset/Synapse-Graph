@@ -4,74 +4,216 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Synapse-Graph — Project Status</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
-      :root{--bg:#0f172a;--card:#071029;--muted:#9fb8d7;--accent:#8bd3ff}
-      body{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;margin:0;background:var(--bg);color:#e6eef8}
-      .wrap{max-width:1000px;margin:28px auto;padding:20px}
-      .card{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));border-radius:12px;padding:20px;box-shadow:0 10px 40px rgba(2,6,23,0.6)}
-      h1{margin:0 0 6px 0;font-size:22px}
-      .list{margin-top:14px}
-      .done{color:#8be39f}
-      .next{color:#ffd08a}
-      .bar{height:12px;background:#09203a;border-radius:999px;overflow:hidden}
-      .progress{height:12px;background:linear-gradient(90deg,#3ee1ff,#8bd3ff);width:75%}
-      a.link{color:var(--accent)}
+      :root{--bg:#0a0f1a;--card-bg:rgba(15,25,45,0.85);--muted:#6b8aad;--accent:#60d4ff;--accent2:#3ee1ff;--glow:rgba(62,225,255,0.15);--success:#4ade80;--warning:#fbbf24;--danger:#f87171}
+      @keyframes fadeUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+      @keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+      @keyframes border-glow{0%,100%{border-color:rgba(62,225,255,0.3)}50%{border-color:rgba(62,225,255,0.6)}}
+      @keyframes scan-line{0%{top:-2px}100%{top:100%}}
+      @keyframes count-up{from{opacity:0;transform:scale(0.8)}to{opacity:1;transform:scale(1)}}
+      *{box-sizing:border-box}
+      html,body{height:100%;margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;background:var(--bg);color:#e6eef8;overflow-x:hidden}
+      .video-frame{position:relative;min-height:100vh;padding:40px;display:flex;flex-direction:column;align-items:center;justify-content:center}
+      .video-frame::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,transparent,var(--accent2),var(--accent),transparent);animation:scan-line 3s linear infinite;opacity:0.5}
+      .frame-border{position:absolute;top:20px;left:20px;right:20px;bottom:20px;border:1px solid rgba(62,225,255,0.2);border-radius:8px;pointer-events:none;animation:border-glow 4s ease-in-out infinite}
+      .card{background:var(--card-bg);backdrop-filter:blur(20px);border:1px solid rgba(62,225,255,0.15);border-radius:16px;padding:32px;max-width:1100px;width:100%;animation:fadeUp .8s ease both;box-shadow:0 20px 60px rgba(0,0,0,0.5),inset 0 1px 0 rgba(255,255,255,0.05)}
+      h1{font-size:32px;font-weight:800;margin:0 0 8px 0;background:linear-gradient(135deg,#e6eef8,#60d4ff);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+      .subtitle{color:var(--muted);font-size:14px;margin-bottom:24px}
+      .mission-box{background:linear-gradient(135deg,rgba(62,225,255,0.1),rgba(96,212,255,0.05));border:1px solid rgba(62,225,255,0.2);border-radius:12px;padding:20px 24px;margin-bottom:24px;display:flex;align-items:center;gap:16px}
+      .mission-icon{width:48px;height:48px;background:linear-gradient(135deg,var(--accent2),var(--accent));border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:24px;flex-shrink:0}
+      .mission-text{font-size:15px;color:#e6eef8;line-height:1.6}
+      .mission-text strong{color:var(--accent)}
+      .stat-row{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px}
+      .stat{background:rgba(0,20,40,0.6);border:1px solid rgba(62,225,255,0.1);border-radius:12px;padding:20px;text-align:center}
+      .stat-icon{width:40px;height:40px;background:linear-gradient(135deg,rgba(62,225,255,0.2),rgba(96,212,255,0.1));border-radius:10px;display:flex;align-items:center;justify-content:center;margin:0 auto 10px;font-size:20px}
+      .stat-num{font-size:28px;font-weight:800;color:var(--accent);animation:count-up 1s ease}
+      .stat-label{font-size:12px;color:var(--muted);margin-top:4px}
+      .stat.done .stat-num{color:var(--success)}
+      .stat.progress .stat-num{color:var(--warning)}
+      .two-col{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+      .panel{background:rgba(0,20,40,0.6);border:1px solid rgba(62,225,255,0.1);border-radius:12px;padding:24px}
+      .panel-title{font-size:16px;font-weight:700;color:var(--accent);margin:0 0 16px 0;display:flex;align-items:center;gap:10px}
+      .checklist{list-style:none;margin:0;padding:0}
+      .checklist li{display:flex;align-items:flex-start;gap:10px;padding:10px 0;border-bottom:1px solid rgba(62,225,255,0.05)}
+      .checklist li:last-child{border-bottom:none}
+      .check-icon{width:20px;height:20px;background:linear-gradient(135deg,var(--success),#22c55e);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;color:#052034;flex-shrink:0;margin-top:2px}
+      .check-text{font-size:13px;color:#e6eef8;line-height:1.5}
+      .check-text.done{color:var(--muted)}
+      .gaps-section{background:rgba(0,20,40,0.6);border:1px solid rgba(248,113,113,0.2);border-radius:12px;padding:24px;margin-top:24px}
+      .gaps-title{font-size:16px;font-weight:700;color:var(--danger);margin:0 0 8px 0;display:flex;align-items:center;gap:10px}
+      .gaps-subtitle{font-size:12px;color:var(--muted);margin-bottom:16px}
+      .gap-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+      .gap-card{background:rgba(0,10,20,0.5);border:1px solid rgba(248,113,113,0.15);border-radius:10px;padding:16px;transition:all .3s ease}
+      .gap-card:hover{border-color:rgba(248,113,113,0.4);transform:translateY(-3px)}
+      .gap-icon{width:32px;height:32px;background:linear-gradient(135deg,rgba(248,113,113,0.2),rgba(248,113,113,0.1));border-radius:8px;display:flex;align-items:center;justify-content:center;margin-bottom:10px;font-size:16px}
+      .gap-title{font-size:13px;font-weight:600;color:#e6eef8;margin-bottom:4px}
+      .gap-desc{font-size:11px;color:var(--muted);line-height:1.5}
+      .gap-priority{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;margin-top:8px}
+      .gap-priority.high{background:rgba(248,113,113,0.15);color:var(--danger)}
+      .gap-priority.medium{background:rgba(251,191,36,0.15);color:var(--warning)}
+      .progress-bar{background:rgba(0,20,40,0.8);border-radius:999px;height:8px;overflow:hidden;margin-top:20px;border:1px solid rgba(62,225,255,0.1)}
+      .progress-fill{height:100%;background:linear-gradient(90deg,var(--accent2),var(--accent));border-radius:999px;transition:width 1s ease}
+      .nav-links{display:flex;gap:16px;justify-content:center;margin-top:20px;flex-wrap:wrap}
+      a.nav{color:var(--accent);text-decoration:none;font-size:13px;padding:8px 16px;border-radius:8px;background:rgba(62,225,255,0.08);border:1px solid rgba(62,225,255,0.2);transition:all .2s ease}
+      a.nav:hover{background:rgba(62,225,255,0.15);border-color:rgba(62,225,255,0.4)}
+      .scene-label{position:absolute;top:30px;left:30px;background:linear-gradient(135deg,rgba(62,225,255,0.2),rgba(96,212,255,0.1));padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;color:var(--accent2);letter-spacing:1px}
+      .vision-box{background:linear-gradient(135deg,rgba(62,225,255,0.08),rgba(96,212,255,0.03));border:1px solid rgba(62,225,255,0.15);border-radius:12px;padding:16px 20px;margin-top:20px}
+      .vision-title{font-size:13px;font-weight:700;color:var(--accent);margin-bottom:6px}
+      .vision-text{font-size:12px;color:var(--muted);line-height:1.6}
+      @media (max-width:900px) {
+        .video-frame{padding:20px}
+        .frame-border{top:10px;left:10px;right:10px;bottom:10px}
+        .scene-label{top:15px;left:15px;font-size:10px;padding:4px 8px}
+        .card{padding:20px}
+        .stat-row{grid-template-columns:repeat(2,1fr)}
+        .two-col{grid-template-columns:1fr}
+        .gap-grid{grid-template-columns:1fr}
+        h1{font-size:24px}
+        .mission-box{flex-direction:column;text-align:center}
+        .nav-links{gap:8px}
+        a.nav{padding:6px 12px;font-size:12px}
+      }
+      @media (max-width:600px) {
+        .video-frame{padding:10px}
+        .card{padding:16px;border-radius:12px}
+        .stat-row{grid-template-columns:1fr 1fr;gap:10px}
+        .stat{padding:12px}
+        .stat-num{font-size:20px}
+        .panel{padding:16px}
+        .gaps-section{padding:16px}
+        .gap-card{padding:12px}
+      }
     </style>
   </head>
   <body>
-    <div class="wrap">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px">
-        <div>
-          <h1>Project status & future goals</h1>
-          <div style="color:var(--muted);font-size:13px">Snapshot of completed work, current state, and planned next steps.</div>
-        </div>
-        <div><a class="link" href="tech_stack.html">Tech stack</a> · <a class="link" href="video_scene.html">Video</a></div>
-      </div>
-
+    <div class="video-frame">
+      <div class="frame-border"></div>
+      <div class="scene-label">SCENE 05 — PROJECT STATUS</div>
       <div class="card">
-        <h3 style="margin:0 0 10px 0">Progress overview</h3>
-        <div style="display:flex;align-items:center;gap:12px">
-          <div style="flex:1">
-            <div style="color:var(--muted);font-size:13px;margin-bottom:8px">Completed checkpoints (representative)</div>
-            <ul class="list">
-              <li class="done">✅ Webhook secret validation implemented</li>
-              <li class="done">✅ OpenMetadata tagging helper with retry/backoff</li>
-              <li class="done">✅ Unit + integration tests for quarantine and discovery flow</li>
-              <li class="done">✅ Frontend overlay traces & causal discovery UI</li>
-              <li class="done">✅ CI workflow for pytest & TypeScript checks</li>
-              <li class="done">✅ `form.md`, `video_script.md`, and documentation updates</li>
+        <h1>Synapse-Graph — Status & Gaps</h1>
+        <p class="subtitle">Making AI "black boxes" traceable — current state and open challenges</p>
+
+        <div class="mission-box">
+          <div class="mission-icon">🎯</div>
+          <div class="mission-text">
+            <strong>Our Mission:</strong> Transform opaque AI models into traceable, governable systems. By discovering causal attention circuits, tagging defective components in OpenMetadata, and providing differential traces, we enable verifiable behavior change in production AI.
+          </div>
+        </div>
+
+        <div class="stat-row">
+          <div class="stat done">
+            <div class="stat-icon">✅</div>
+            <div class="stat-num">8/10</div>
+            <div class="stat-label">Core Features Done</div>
+          </div>
+          <div class="stat">
+            <div class="stat-icon">🧪</div>
+            <div class="stat-num">24+</div>
+            <div class="stat-label">Tests Written</div>
+          </div>
+          <div class="stat">
+            <div class="stat-icon">⚙️</div>
+            <div class="stat-num">5</div>
+            <div class="stat-label">API Endpoints</div>
+          </div>
+          <div class="stat progress">
+            <div class="stat-icon">🚀</div>
+            <div class="stat-num">PR</div>
+            <div class="stat-label">Open PR</div>
+          </div>
+        </div>
+
+        <div class="progress-bar">
+          <div class="progress-fill" style="--progress:75%;width:75%"></div>
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin-top:8px">Core pipeline working — significant gaps remain for production-grade interpretability</div>
+
+        <div class="two-col" style="margin-top:24px">
+          <div class="panel" style="animation:float 4s ease-in-out infinite">
+            <div class="panel-title">✅ Completed Features</div>
+            <ul class="checklist">
+              <li><div class="check-icon">✓</div><span class="check-text">Webhook secret validation with secure hmac comparison</span></li>
+              <li><div class="check-icon">✓</div><span class="check-text">OpenMetadata tagging helper with retry/backoff</span></li>
+              <li><div class="check-icon">✓</div><span class="check-text">Unit + integration tests for quarantine flow</span></li>
+              <li><div class="check-icon">✓</div><span class="check-text">Frontend: synapse graph & differential overlays</span></li>
+              <li><div class="check-icon">✓</div><span class="check-text">Causal discovery UI with attention visualization</span></li>
+              <li><div class="check-icon">✓</div><span class="check-text">GitHub Actions CI: pytest + TypeScript checks</span></li>
+              <li><div class="check-icon">✓</div><span class="check-text">Documentation: form.md, video_script.md, explain.md</span></li>
+              <li><div class="check-icon">✓</div><span class="check-text">HeadMaskStore runtime state management</span></li>
             </ul>
           </div>
-          <div style="width:260px">
-            <div style="font-size:13px;color:var(--muted);margin-bottom:6px">Overall progress</div>
-            <div class="bar" aria-hidden><div class="progress"></div></div>
-            <div style="font-size:12px;color:var(--muted);margin-top:8px">Most items complete; remaining: open PR and optional extras.</div>
+
+          <div class="panel" style="animation:float 4.5s ease-in-out infinite;animation-delay:0.5s">
+            <div class="panel-title">🎯 Current Focus Areas</div>
+            <ul class="checklist">
+              <li><div class="check-icon" style="background:linear-gradient(135deg,#fbbf24,#f59e0b)">→</div><span class="check-text">Pair ablation sweeps — single-head ablations done, pairs are slow</span></li>
+              <li><div class="check-icon" style="background:linear-gradient(135deg,#fbbf24,#f59e0b)">→</div><span class="check-text">Edge case handling — multi-head interactions not fully mapped</span></li>
+              <li><div class="check-icon" style="background:linear-gradient(135deg,#fbbf24,#f59e0b)">→</div><span class="check-text">Scalability — larger models have exponentially more heads</span></li>
+            </ul>
           </div>
         </div>
-      </div>
 
-      <div class="card" style="margin-top:14px">
-        <h3 style="margin:0 0 10px 0">Current state (what's in the repo)</h3>
-        <ul class="list">
-          <li>Backend API with endpoints for discovery, quarantine, OpenMetadata sync.</li>
-          <li>Inference runtime with `HeadMaskStore` and hook-based tracer.</li>
-          <li>Next.js frontend with synapse graph, overlays, and UI controls.</li>
-          <li>Automated tests (unit + integration) and GitHub Actions workflow.</li>
-        </ul>
-      </div>
+        <div class="gaps-section">
+          <div class="gaps-title">
+            <span>⚠️</span> Open Challenges in Making AI Traceable
+          </div>
+          <div class="gaps-subtitle">Real product gaps that prevent this from being production-grade interpretability tooling</div>
 
-      <div class="card" style="margin-top:14px">
-        <h3 style="margin:0 0 10px 0">Future goals & growth roadmap</h3>
-        <ol class="list">
-          <li>Open a PR and gather feedback from collaborators (short-term).</li>
-          <li>Add deeper ablation sweeps (pair/triple) and heuristic ranking improvements.</li>
-          <li>Provide an optional OpenMetadata mock for offline testing and CI.</li>
-          <li>Capture audit trails in OpenMetadata (tags + who/when updates were applied).</li>
-          <li>Polish UX, add proposed quarantines with human approval, and add exportable reports.</li>
-        </ol>
-      </div>
+          <div class="gap-grid">
+            <div class="gap-card">
+              <div class="gap-icon">🔬</div>
+              <div class="gap-title">Head ↔ Behavior Causality Not Proven</div>
+              <div class="gap-desc">We can ablate heads and observe output changes, but proving those heads *cause* hallucinations vs correlate with them is unsolved. Need counterfactual validation and ground-truth benchmarks.</div>
+              <span class="gap-priority high">HIGH RISK</span>
+            </div>
+            <div class="gap-card">
+              <div class="gap-icon">🎯</div>
+              <div class="gap-title">No Ground-Truth Validation</div>
+              <div class="gap-desc">Without a dataset of known hallucination circuits, we can't measure false positives. Ranking heuristics are heuristic — we don't know if we're finding real causal circuits or just noise.</div>
+              <span class="gap-priority high">HIGH RISK</span>
+            </div>
+            <div class="gap-card">
+              <div class="gap-icon">📊</div>
+              <div class="gap-title">Scalability Gap: Head Explosion</div>
+              <div class="gap-desc">GPT-4 class models have 100B+ parameters. Pair ablation of all heads is O(n²). Current approach doesn't scale. Need intelligent pruning or hierarchical discovery before full sweeps.</div>
+              <span class="gap-priority high">HIGH RISK</span>
+            </div>
+            <div class="gap-card">
+              <div class="gap-icon">🔗</div>
+              <div class="gap-title">Token-Level vs Layer-Level Tracing</div>
+              <div class="gap-desc">Current traces operate at layer level. But hallucinations often emerge from specific token-to-token interactions. Need finer-grained token-level attribution.</div>
+              <span class="gap-priority medium">MEDIUM</span>
+            </div>
+            <div class="gap-card">
+              <div class="gap-icon">🧠</div>
+              <div class="gap-title">No Contextual Understanding</div>
+              <div class="gap-desc">Same head may be defective for some prompts but critical for others. Current masking is binary. Need prompt-type aware masking or dynamic quarantine.</div>
+              <span class="gap-priority medium">MEDIUM</span>
+            </div>
+            <div class="gap-card">
+              <div class="gap-icon">⏱️</div>
+              <div class="gap-title">Latency Overhead</div>
+              <div class="gap-desc">PyTorch hooks add inference latency. For production, tracing must be near-zero-cost. Current implementation is research-grade, not production-grade.</div>
+              <span class="gap-priority medium">MEDIUM</span>
+            </div>
+          </div>
+        </div>
 
-      <div style="margin-top:14px;text-align:right;color:var(--muted);font-size:13px">For details, open <a class="link" href="README.md">README.md</a> or the architecture diagram (<a class="link" href="video_diagram.html">diagram</a>).</div>
+        <div class="vision-box">
+          <div class="vision-title">🔭 The Path Forward</div>
+          <div class="vision-text">To make AI truly traceable, we need: (1) ground-truth hallucination datasets to validate circuits, (2) scalable discovery algorithms that don't require O(n²) ablation, (3) token-level attribution instead of layer-level, (4) production-grade tracing with minimal latency overhead. This project is the foundation — these are the research problems that remain open.</div>
+        </div>
+
+        <div class="nav-links">
+          <a class="nav" href="openmetadata_usage.html">← OpenMetadata</a>
+          <a class="nav" href="last_frame.html">Thank You →</a>
+          <a class="nav" href="first_frame.html">Intro</a>
+          <a class="nav" href="tech_stack.html">Tech Stack</a>
+          <a class="nav" href="video_scene.html">Demo</a>
+        </div>
+      </div>
     </div>
+    <script src="tour.js"></script>
   </body>
 </html>

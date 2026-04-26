@@ -4,132 +4,166 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Synapse-Graph — Tech Stack</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
-      :root{--bg:#0f172a;--card:#071029;--muted:#9fb8d7;--accent:#8bd3ff;--glass: rgba(255,255,255,0.02)}
-      body{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;margin:0;background:var(--bg);color:#e6eef8}
-      .wrap{max-width:1100px;margin:28px auto;padding:20px}
-      .card{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));border-radius:12px;padding:20px;box-shadow:0 10px 40px rgba(2,6,23,0.6)}
-      h1{margin:0 0 6px 0;font-size:22px}
-      .grid{display:grid;grid-template-columns:1fr 360px;gap:18px;margin-top:16px}
-      .stack-list{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
-      .stack-card{background:var(--card);border-radius:10px;padding:12px}
-      .badge{display:inline-block;padding:6px 10px;border-radius:999px;background:rgba(139,211,255,0.08);color:var(--accent);font-weight:600;font-size:12px}
-      pre{background:var(--glass);padding:8px;border-radius:8px;overflow:auto}
-      .nav{display:flex;gap:10px;margin-bottom:14px}
-      a.link{color:var(--accent);text-decoration:none}
-      .right{padding-left:12px}
-      .pill{display:inline-block;padding:6px 10px;border-radius:999px;background:#081426;color:#cfe3ff;font-size:13px}
+      :root{--bg:#0a0f1a;--card-bg:rgba(15,25,45,0.85);--muted:#6b8aad;--accent:#60d4ff;--accent2:#3ee1ff;--glow:rgba(62,225,255,0.15)}
+      @keyframes fadeUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+      @keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+      @keyframes border-glow{0%,100%{border-color:rgba(62,225,255,0.3)}50%{border-color:rgba(62,225,255,0.6)}}
+      @keyframes scan-line{0%{top:-2px}100%{top:100%}}
+      @keyframes count-up{from{opacity:0;transform:scale(0.8)}to{opacity:1;transform:scale(1)}}
+      *{box-sizing:border-box}
+      html,body{height:100%;margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;background:var(--bg);color:#e6eef8;overflow-x:hidden}
+      .video-frame{position:relative;min-height:100vh;padding:40px;display:flex;flex-direction:column;align-items:center;justify-content:center}
+      .video-frame::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,transparent,var(--accent2),var(--accent),transparent);animation:scan-line 3s linear infinite;opacity:0.5}
+      .frame-border{position:absolute;top:20px;left:20px;right:20px;bottom:20px;border:1px solid rgba(62,225,255,0.2);border-radius:8px;pointer-events:none;animation:border-glow 4s ease-in-out infinite}
+      .card{background:var(--card-bg);backdrop-filter:blur(20px);border:1px solid rgba(62,225,255,0.15);border-radius:16px;padding:32px;max-width:1200px;width:100%;animation:fadeUp .8s ease both;box-shadow:0 20px 60px rgba(0,0,0,0.5),inset 0 1px 0 rgba(255,255,255,0.05)}
+      h1{font-size:32px;font-weight:800;margin:0 0 8px 0;background:linear-gradient(135deg,#e6eef8,#60d4ff);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+      .subtitle{color:var(--muted);font-size:14px;margin-bottom:24px}
+      .tech-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:20px}
+      .tech-card{background:rgba(0,20,40,0.6);border:1px solid rgba(62,225,255,0.1);border-radius:12px;padding:20px;transition:all .3s ease;text-align:center}
+      .tech-card:hover{transform:translateY(-6px);border-color:rgba(62,225,255,0.3);box-shadow:0 10px 40px rgba(62,225,255,0.1)}
+      .tech-icon{width:56px;height:56px;background:linear-gradient(135deg,rgba(62,225,255,0.2),rgba(96,212,255,0.1));border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 12px}
+      .tech-title{font-size:14px;font-weight:700;color:var(--accent);margin-bottom:8px}
+      .tech-items{font-size:12px;color:var(--muted);line-height:1.6;text-align:left;padding-left:8px}
+      .tech-items li{margin-bottom:4px;list-style:none}
+      .tech-items li::before{content:'→ ';color:var(--accent2)}
+      .two-col{display:grid;grid-template-columns:1.2fr 1fr;gap:20px;margin-top:20px}
+      .panel{background:rgba(0,20,40,0.6);border:1px solid rgba(62,225,255,0.1);border-radius:12px;padding:20px}
+      .panel h3{font-size:14px;font-weight:600;color:var(--accent);margin:0 0 12px 0;display:flex;align-items:center;gap:8px}
+      .badge{background:linear-gradient(135deg,rgba(62,225,255,0.2),rgba(96,212,255,0.1));padding:4px 10px;border-radius:20px;font-size:11px;font-weight:600;color:var(--accent2)}
+      pre{background:rgba(0,10,20,0.8);border:1px solid rgba(62,225,255,0.1);border-radius:8px;padding:16px;font-size:12px;color:#a8d4f0;overflow-x:auto;line-height:1.6}
+      .stat-row{display:flex;gap:16px;margin-top:16px;flex-wrap:wrap}
+      .stat{background:linear-gradient(135deg,rgba(62,225,255,0.1),rgba(96,212,255,0.05));border-radius:8px;padding:12px 16px;text-align:center;flex:1;min-width:120px;border:1px solid rgba(62,225,255,0.1)}
+      .stat-num{font-size:24px;font-weight:800;color:var(--accent);animation:count-up 1s ease}
+      .stat-label{font-size:11px;color:var(--muted);margin-top:4px}
+      .nav-links{display:flex;gap:16px;justify-content:center;margin-top:20px;flex-wrap:wrap}
+      a.nav{color:var(--accent);text-decoration:none;font-size:13px;padding:8px 16px;border-radius:8px;background:rgba(62,225,255,0.08);border:1px solid rgba(62,225,255,0.2);transition:all .2s ease}
+      a.nav:hover{background:rgba(62,225,255,0.15);border-color:rgba(62,225,255,0.4)}
+      .scene-label{position:absolute;top:30px;left:30px;background:linear-gradient(135deg,rgba(62,225,255,0.2),rgba(96,212,255,0.1));padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;color:var(--accent2);letter-spacing:1px}
+      @media (max-width:900px) {
+        .video-frame{padding:20px}
+        .frame-border{top:10px;left:10px;right:10px;bottom:10px}
+        .scene-label{top:15px;left:15px;font-size:10px;padding:4px 8px}
+        .card{padding:20px}
+        .tech-grid{grid-template-columns:repeat(2,1fr);gap:12px}
+        .two-col{grid-template-columns:1fr;gap:16px}
+        h1{font-size:24px}
+        .stat-row{gap:10px}
+        .stat{min-width:100px}
+        .nav-links{gap:8px}
+        a.nav{padding:6px 12px;font-size:12px}
+      }
+      @media (max-width:600px) {
+        .video-frame{padding:10px}
+        .card{padding:16px;border-radius:12px}
+        .tech-grid{grid-template-columns:1fr 1fr;gap:10px}
+        .tech-card{padding:14px}
+        .tech-icon{width:44px;height:44px;font-size:22px;margin-bottom:8px}
+        .tech-title{font-size:12px}
+        .tech-items{font-size:11px}
+        .panel{padding:14px}
+        pre{font-size:11px;padding:12px}
+        .stat{padding:10px 12px}
+        .stat-num{font-size:18px}
+      }
     </style>
-    <script src="https://unpkg.com/mermaid@10/dist/mermaid.min.js"></script>
-    <script>mermaid.initialize({startOnLoad:true,theme:'dark'});</script>
   </head>
   <body>
-    <div class="wrap">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px">
-        <div>
-          <h1>Synapse-Graph — Tech Stack</h1>
-          <div style="color:var(--muted);font-size:13px">A factual snapshot of the repo manifests and how components map to runtime roles.</div>
-        </div>
-        <div class="nav">
-          <a class="link" href="video_diagram.html">Architecture diagram</a>
-          <a class="link" href="project_status.html">Project status</a>
-          <a class="link" href="openmetadata_usage.html">OpenMetadata usage</a>
-          <a class="link" href="video_scene.html">Video player</a>
-        </div>
-      </div>
+    <div class="video-frame">
+      <div class="frame-border"></div>
+      <div class="scene-label">SCENE 02 — TECH STACK</div>
+      <div class="card">
+        <h1>Synapse-Graph — Tech Stack</h1>
+        <p class="subtitle">Production-ready stack for AI interpretability and metadata governance</p>
 
-      <div class="grid">
-        <div>
-          <div class="card">
-            <div style="display:flex;gap:12px;align-items:center;justify-content:space-between">
-              <div>
-                <div style="display:flex;gap:8px;align-items:center"><span class="badge">Repo facts</span><span style="color:var(--muted);font-size:13px">(sourced from project manifests)</span></div>
-                <h2 style="margin:8px 0 0 0;font-size:16px">Core components</h2>
-              </div>
-              <div class="pill">Python >=3.11 &middot; Next.js</div>
-            </div>
+        <div class="stat-row">
+          <div class="stat"><div class="stat-num">Python 3.11+</div><div class="stat-label">Backend Runtime</div></div>
+          <div class="stat"><div class="stat-num">Next.js 15</div><div class="stat-label">Frontend Framework</div></div>
+          <div class="stat"><div class="stat-num">PyTorch</div><div class="stat-label">Tracing Engine</div></div>
+          <div class="stat"><div class="stat-num">OpenMetadata</div><div class="stat-label">Governance Plane</div></div>
+        </div>
 
-            <div style="margin-top:12px">
-              <div class="stack-list">
-                <div class="stack-card">
-                  <strong>Backend (selected)</strong>
-                  <ul style="margin:8px 0 0 16px;color:var(--muted)">
-                    <li>fastapi</li>
-                    <li>httpx</li>
-                    <li>openmetadata-ingestion</li>
-                    <li>torch, transformers, accelerate</li>
-                    <li>uvicorn</li>
-                  </ul>
-                </div>
-                <div class="stack-card">
-                  <strong>Frontend (selected)</strong>
-                  <ul style="margin:8px 0 0 16px;color:var(--muted)">
-                    <li>next (15.x)</li>
-                    <li>react 19 / react-dom</li>
-                    <li>@xyflow/react (graph viz)</li>
-                    <li>recharts</li>
-                    <li>tailwindcss</li>
-                  </ul>
-                </div>
-                <div class="stack-card">
-                  <strong>Metadata stack</strong>
-                  <ul style="margin:8px 0 0 16px;color:var(--muted)">
-                    <li>OpenMetadata ingestion SDK</li>
-                    <li>REST tagging + ingestion API</li>
-                  </ul>
-                </div>
-                <div class="stack-card">
-                  <strong>Dev / CI</strong>
-                  <ul style="margin:8px 0 0 16px;color:var(--muted)">
-                    <li>pytest (tests)</li>
-                    <li>npx tsc --noEmit (TS typecheck)</li>
-                    <li>GitHub Actions workflow included</li>
-                  </ul>
-                </div>
-              </div>
-            </div>
+        <div class="tech-grid">
+          <div class="tech-card" style="animation:float 4s ease-in-out infinite">
+            <div class="tech-icon">🐍</div>
+            <div class="tech-title">Backend</div>
+            <ul class="tech-items">
+              <li>FastAPI</li>
+              <li>PyTorch + transformers</li>
+              <li>OpenMetadata SDK</li>
+              <li>Uvicorn</li>
+              <li>httpx</li>
+            </ul>
           </div>
-
-          <div class="card" style="margin-top:14px">
-            <h3 style="margin:0 0 8px 0">Runtime role mapping</h3>
-            <div class="mermaid">
-              flowchart LR
-              U["User Dashboard\n(Next.js)"] --> API["FastAPI Neural Proxy\n(NeuralProxyRuntime)"]
-              API --> GEN["Generation Engine\n(Ollama preferred / HF fallback)"]
-              API --> TR["Shadow Tracer\n(PyTorch + transformers)"]
-              TR --> OM["OpenMetadata\n(topology & lineage)"]
-              API --> OM
-              API --> MASK["HeadMaskStore\n(runtime masks)"]
-            </div>
+          <div class="tech-card" style="animation:float 4.5s ease-in-out infinite;animation-delay:0.3s">
+            <div class="tech-icon">⚛️</div>
+            <div class="tech-title">Frontend</div>
+            <ul class="tech-items">
+              <li>Next.js 15.x</li>
+              <li>React 19</li>
+              <li>@xyflow/react</li>
+              <li>Recharts</li>
+              <li>TailwindCSS</li>
+            </ul>
+          </div>
+          <div class="tech-card" style="animation:float 5s ease-in-out infinite;animation-delay:0.6s">
+            <div class="tech-icon">📊</div>
+            <div class="tech-title">Metadata</div>
+            <ul class="tech-items">
+              <li>OpenMetadata ingestion</li>
+              <li>REST tagging API</li>
+              <li>Lineage tracking</li>
+              <li>Column-level tags</li>
+            </ul>
+          </div>
+          <div class="tech-card" style="animation:float 5.5s ease-in-out infinite;animation-delay:0.9s">
+            <div class="tech-icon">🔧</div>
+            <div class="tech-title">CI/CD</div>
+            <ul class="tech-items">
+              <li>pytest (unit + integration)</li>
+              <li>TypeScript checks</li>
+              <li>GitHub Actions</li>
+              <li>Git hooks</li>
+            </ul>
           </div>
         </div>
 
-        <div class="right">
-          <div class="card">
-            <h3 style="margin:0 0 8px 0">Quick manifest snippets</h3>
-            <div style="color:var(--muted);font-size:13px">Excerpt from <code>backend/pyproject.toml</code> and <code>frontend/package.json</code></div>
-            <pre><code>{
-  "backend": [
-    "fastapi", "httpx", "openmetadata-ingestion", "torch", "transformers", "uvicorn"
-  ],
-  "frontend": [
-    "next@^15", "react@^19", "@xyflow/react", "recharts", "tailwindcss"
-  ]
-}</code></pre>
-            <div style="margin-top:10px;color:var(--muted);font-size:13px">Use this page in the video to point at concrete tech choices — these are exact manifest entries in the repository.</div>
-          </div>
+        <div class="two-col" style="margin-top:20px">
+          <div class="panel">
+            <h3><span class="badge">Package Manifests</span> Exact Dependencies</h3>
+            <pre>backend/pyproject.toml:
+  python = ">=3.11,<3.13"
+  fastapi, httpx, uvicorn
+  torch, transformers, accelerate
+  openmetadata-ingestion
 
-          <div class="card" style="margin-top:12px">
-            <h4 style="margin:0 0 8px 0">Quick links</h4>
-            <div style="display:flex;flex-direction:column;gap:8px">
-              <a class="link" href="video_diagram.html">Architecture diagram</a>
-              <a class="link" href="project_status.html">Project status & goals</a>
-              <a class="link" href="openmetadata_usage.html">OpenMetadata usage</a>
-              <a class="link" href="video_scene.html">Video player / upload</a>
-            </div>
+frontend/package.json:
+  next@^15.2.0
+  react@^19.0.0
+  @xyflow/react@^12.4.4
+  recharts, tailwindcss</pre>
           </div>
+          <div class="panel">
+            <h3><span class="badge">Why This Stack?</span></h3>
+            <ul style="margin:0;padding-left:20px;color:var(--muted);font-size:13px;line-height:1.8">
+              <li><strong style="color:var(--accent)">FastAPI</strong> — async, testable API layer</li>
+              <li><strong style="color:var(--accent)">PyTorch hooks</strong> — non-invasive tracing</li>
+              <li><strong style="color:var(--accent)">OpenMetadata</strong> — existing governance infra</li>
+              <li><strong style="color:var(--accent)">Next.js + React</strong> — reactive UI for graphs</li>
+              <li><strong style="color:var(--accent)">@xyflow</strong> — purpose-built graph viz</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="nav-links">
+          <a class="nav" href="video_diagram.html">← Architecture</a>
+          <a class="nav" href="video_scene.html">Demo Video →</a>
+          <a class="nav" href="project_status.html">Status</a>
+          <a class="nav" href="openmetadata_usage.html">OpenMetadata</a>
         </div>
       </div>
     </div>
+    <script src="tour.js"></script>
   </body>
 </html>

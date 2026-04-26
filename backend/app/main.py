@@ -4,6 +4,7 @@ import asyncio
 import difflib
 from itertools import combinations
 import json
+import time
 import logging
 import re
 from contextlib import asynccontextmanager, suppress
@@ -427,6 +428,13 @@ class NeuralProxyRuntime:
         )
 
     async def discover_circuit(self, request: CircuitDiscoveryRequest) -> CircuitDiscoveryResponse:
+        start_time = time.monotonic()
+        LOGGER.info(
+            "discover_circuit: start (top_k=%s, max_pair_sweeps=%s)",
+            request.top_k_heads,
+            request.max_pair_sweeps,
+        )
+
         generation_request = GenerationRequest(
             prompt=request.prompt,
             system_prompt=request.system_prompt,
@@ -447,7 +455,11 @@ class NeuralProxyRuntime:
 
         try:
             await self.inference.set_masked_heads(set())
+            t0 = time.monotonic()
+            LOGGER.info("discover_circuit: baseline generation starting")
             baseline = await self.inference.generate(generation_request)
+            t1 = time.monotonic()
+            LOGGER.info("discover_circuit: baseline generation completed (%.3fs)", t1 - t0)
             candidate_heads = _rank_circuit_heads(baseline.trace, top_k=request.top_k_heads)
             baseline_target_count = _count_target_token(
                 baseline.text,
@@ -459,7 +471,15 @@ class NeuralProxyRuntime:
             mask_groups.extend(pair_groups)
 
             sweep_results: list[CircuitAblationResult] = []
-            for mask_group in mask_groups:
+            LOGGER.info("discover_circuit: running %d sweep groups", len(mask_groups))
+            for idx, mask_group in enumerate(mask_groups, start=1):
+                LOGGER.info(
+                    "discover_circuit: sweep %d/%d - masks=%s",
+                    idx,
+                    len(mask_groups),
+                    [(h.layer_index, h.head_index) for h in mask_group],
+                )
+                step_t0 = time.monotonic()
                 await self.inference.set_masked_heads(
                     {
                         (head.layer_index, head.head_index)
@@ -467,6 +487,12 @@ class NeuralProxyRuntime:
                     }
                 )
                 ablated = await self.inference.generate(generation_request)
+                step_t1 = time.monotonic()
+                LOGGER.info(
+                    "discover_circuit: sweep %d generation completed (%.3fs)",
+                    idx,
+                    step_t1 - step_t0,
+                )
                 target_count = _count_target_token(
                     ablated.text,
                     request.target_hallucination_token,
@@ -491,6 +517,7 @@ class NeuralProxyRuntime:
                         trace=ablated.trace,
                     )
                 )
+            LOGGER.info("discover_circuit: completed sweeps; total so far (%.3fs)", time.monotonic() - t0)
         finally:
             await self.inference.set_masked_heads(previous_masks)
 
@@ -516,6 +543,140 @@ class NeuralProxyRuntime:
                 target_hallucination_token=request.target_hallucination_token,
             ),
         )
+
+    async def discover_circuit_stream(self, request: CircuitDiscoveryRequest) -> StreamingResponse:
+        """Run circuit discovery and stream progress via Server-Sent Events.
+
+        Events emitted:
+        - session: initial topology and metadata
+        - progress: generic progress messages
+        - sweep_start: {idx, total, masks}
+        - sweep_done: {idx, result_summary}
+        - done: final CircuitDiscoveryResponse as JSON string
+        - error: on failure
+        """
+        generation_request = GenerationRequest(
+            prompt=request.prompt,
+            system_prompt=request.system_prompt,
+            max_new_tokens=request.max_new_tokens,
+            temperature=0,
+            top_p=0.95,
+            stream=False,
+            execution_mode=TraceExecutionMode.FAITHFUL,
+            trace_model_name=request.trace_model_name,
+        )
+
+        await self._select_trace_model(generation_request)
+        topology, catalog = await self.ensure_topology()
+
+        event_queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue()
+
+        async def producer() -> None:
+            previous_masks = {
+                (mask.layer_index, mask.head_index)
+                for mask in self.inference.get_masked_heads()
+            }
+            try:
+                await self.inference.set_masked_heads(set())
+                await event_queue.put(("progress", {"message": "baseline_generation_start"}))
+                t0 = time.monotonic()
+                baseline = await self.inference.generate(generation_request)
+                t1 = time.monotonic()
+                await event_queue.put(("progress", {"message": "baseline_generation_done", "duration": t1 - t0}))
+
+                candidate_heads = _rank_circuit_heads(baseline.trace, top_k=request.top_k_heads)
+                baseline_target_count = _count_target_token(baseline.text, request.target_hallucination_token)
+
+                mask_groups: list[tuple[CircuitHead, ...]] = [(head,) for head in candidate_heads]
+                pair_groups = list(combinations(candidate_heads, 2))[: request.max_pair_sweeps]
+                mask_groups.extend(pair_groups)
+
+                sweep_results: list[CircuitAblationResult] = []
+                await event_queue.put(("progress", {"message": "running_sweeps", "count": len(mask_groups)}))
+
+                for idx, mask_group in enumerate(mask_groups, start=1):
+                    await event_queue.put(("sweep_start", {"idx": idx, "total": len(mask_groups), "masks": [(h.layer_index, h.head_index) for h in mask_group]}))
+                    step_t0 = time.monotonic()
+                    await self.inference.set_masked_heads({(h.layer_index, h.head_index) for h in mask_group})
+                    ablated = await self.inference.generate(generation_request)
+                    step_t1 = time.monotonic()
+                    await event_queue.put(("sweep_done", {
+                        "idx": idx,
+                        "duration": step_t1 - step_t0,
+                        "target_count": _count_target_token(ablated.text, request.target_hallucination_token),
+                    }))
+
+                    target_count = _count_target_token(ablated.text, request.target_hallucination_token)
+                    text_similarity = difflib.SequenceMatcher(None, baseline.text, ablated.text).ratio()
+                    target_reduction = _target_reduction_score(
+                        baseline_target_count=baseline_target_count,
+                        ablated_target_count=target_count,
+                    )
+                    causal_effect_score = max(
+                        0.0,
+                        min(1.0, max(1.0 - text_similarity, target_reduction)),
+                    )
+                    sweep_results.append(
+                        CircuitAblationResult(
+                            masked_heads=list(mask_group),
+                            output_text=ablated.text,
+                            target_present=target_count > 0,
+                            target_count=target_count,
+                            text_similarity=round(text_similarity, 4),
+                            causal_effect_score=round(causal_effect_score, 4),
+                            trace=ablated.trace,
+                        )
+                    )
+
+                best_result = _select_best_circuit_result(sweep_results, baseline_target_count=baseline_target_count)
+                discovered_circuit = best_result.masked_heads if best_result is not None else []
+                combined_effect = best_result.causal_effect_score if best_result is not None else 0.0
+
+                final = CircuitDiscoveryResponse(
+                    target_hallucination_token=request.target_hallucination_token,
+                    baseline=baseline,
+                    baseline_target_present=baseline_target_count > 0,
+                    baseline_target_count=baseline_target_count,
+                    candidate_heads=candidate_heads,
+                    sweep_results=sweep_results,
+                    discovered_circuit=discovered_circuit,
+                    combined_causal_effect=combined_effect,
+                    verdict=_circuit_verdict(
+                        baseline_target_count=baseline_target_count,
+                        best_result=best_result,
+                        target_hallucination_token=request.target_hallucination_token,
+                    ),
+                )
+
+                # Send final response as JSON string for client to parse
+                await event_queue.put(("done", {"response": final.model_dump(mode="json")}))
+            except Exception as exc:
+                LOGGER.exception("discover_circuit_stream producer failed")
+                await event_queue.put(("error", {"message": str(exc)}))
+            finally:
+                await self.inference.set_masked_heads(previous_masks)
+                await event_queue.put(("close", {}))
+
+        async def event_iterator() -> Any:
+            producer_task = asyncio.create_task(producer())
+            try:
+                yield _format_sse(
+                    "session",
+                    {
+                        "topology": topology.model_dump(mode="json") if topology is not None else None,
+                    },
+                )
+
+                while True:
+                    event_name, payload = await event_queue.get()
+                    if event_name == "close":
+                        break
+                    yield _format_sse(event_name, payload)
+            finally:
+                with suppress(asyncio.CancelledError):
+                    await producer_task
+
+        return StreamingResponse(event_iterator(), media_type="text/event-stream")
 
     async def quarantine_circuit(self, request: QuarantineRequest) -> OpenMetadataWebhookResponse:
         topology, catalog = await self.ensure_topology()
@@ -616,6 +777,75 @@ class NeuralProxyRuntime:
             masked_heads=masked_heads,
             reason="OpenMetadata governance event applied to the live PyTorch head routing table.",
         )
+
+    async def quarantine_circuit_stream(self, request: QuarantineRequest) -> StreamingResponse:
+        topology, catalog = await self.ensure_topology()
+
+        event_queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue()
+
+        async def producer() -> None:
+            try:
+                if not self.openmetadata_settings.openmetadata_enabled or catalog is None:
+                    await event_queue.put(("error", {"message": "OpenMetadata disabled or catalog unavailable."}))
+                    await event_queue.put(("close", {}))
+                    return
+
+                parsed_pairs: list[tuple[int, int]] = sorted({(h.layer_index, h.head_index) for h in request.heads})
+                total = len(parsed_pairs)
+                await event_queue.put(("progress", {"message": "quarantine_start", "total": total}))
+
+                applied: list[HeadMask] = []
+                idx = 0
+                for (layer, head) in parsed_pairs:
+                    idx += 1
+                    await event_queue.put(("progress", {"message": "quarantine_pair_start", "pair": (layer, head), "idx": idx, "total": total}))
+                    try:
+                        # Apply tags for this single pair so we can stream per-head progress
+                        applied_for_pair = await self.openmetadata.apply_defective_tags(catalog, {(layer, head)}, reason=request.reason)
+                        if applied_for_pair:
+                            applied.extend(applied_for_pair)
+                        await event_queue.put(("progress", {"message": "quarantine_pair_done", "pair": (layer, head), "idx": idx, "applied_count": len(applied_for_pair)}))
+                    except Exception as exc:
+                        LOGGER.exception("Failed to apply defective tag for pair %s", (layer, head))
+                        await event_queue.put(("progress", {"message": "quarantine_pair_error", "pair": (layer, head), "idx": idx, "error": str(exc)}))
+
+                # Also ensure the runtime mask table is updated immediately
+                current_pairs = {(mask.layer_index, mask.head_index) for mask in self.inference.get_masked_heads()}
+                current_pairs.update(parsed_pairs)
+                masked_heads = await self.inference.set_masked_heads(current_pairs)
+
+                parsed_heads = [
+                    HeadMask(
+                        layer_index=layer,
+                        layer_name=f"Layer_{layer + 1}",
+                        head_index=head,
+                        head_name=f"Head_{head + 1}",
+                        reason=request.reason,
+                    )
+                    for (layer, head) in parsed_pairs
+                ]
+
+                await event_queue.put(("done", {"applied": len(applied) > 0, "parsed_heads": [p.model_dump(mode="json") for p in parsed_heads], "masked_heads": [m.model_dump(mode="json") for m in masked_heads], "reason": ("Quarantine tags applied." if applied else "No tags applied.")}))
+            except Exception as exc:
+                LOGGER.exception("quarantine_circuit_stream producer failed")
+                await event_queue.put(("error", {"message": str(exc)}))
+            finally:
+                await event_queue.put(("close", {}))
+
+        async def event_iterator() -> Any:
+            producer_task = asyncio.create_task(producer())
+            try:
+                yield _format_sse("session", {"topology": topology.model_dump(mode="json") if topology is not None else None})
+                while True:
+                    event_name, payload = await event_queue.get()
+                    if event_name == "close":
+                        break
+                    yield _format_sse(event_name, payload)
+            finally:
+                with suppress(asyncio.CancelledError):
+                    await producer_task
+
+        return StreamingResponse(event_iterator(), media_type="text/event-stream")
 
     async def _select_trace_model(self, request: GenerationRequest) -> None:
         if not request.trace_model_name:
@@ -893,6 +1123,11 @@ async def discover_circuit(request: CircuitDiscoveryRequest) -> CircuitDiscovery
     return await runtime.discover_circuit(request)
 
 
+@app.post("/api/v1/autopsy/discover_circuit/stream")
+async def discover_circuit_stream(request: CircuitDiscoveryRequest) -> StreamingResponse:
+    return await runtime.discover_circuit_stream(request)
+
+
 @app.post("/api/v1/webhooks/openmetadata", response_model=OpenMetadataWebhookResponse)
 async def openmetadata_webhook(request: Request) -> OpenMetadataWebhookResponse:
     # Validate optional webhook secret header
@@ -909,6 +1144,11 @@ async def openmetadata_webhook(request: Request) -> OpenMetadataWebhookResponse:
 @app.post("/api/v1/openmetadata/quarantine", response_model=OpenMetadataWebhookResponse)
 async def quarantine_openmetadata(request: QuarantineRequest) -> OpenMetadataWebhookResponse:
     return await runtime.quarantine_circuit(request)
+
+
+@app.post("/api/v1/openmetadata/quarantine/stream")
+async def quarantine_openmetadata_stream(request: QuarantineRequest) -> StreamingResponse:
+    return await runtime.quarantine_circuit_stream(request)
 
 
 @app.post("/api/v1/generate", response_model=GenerateResponse)
