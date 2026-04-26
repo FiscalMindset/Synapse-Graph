@@ -19,7 +19,7 @@
 | Scene | Description |
 |-------|-------------|
 | [Intro](https://fiscalmindset.github.io/Synapse-Graph/first_frame.html) | Project overview, features, graph visualization |
-| [Architecture](https://fiscalmindset.github.io/Synapse-Graph/video_diagram.html) | Component flow |
+| [Architecture](https://fiscalmindset.github.io/Synapse-Graph/architecture.html) | Interactive component diagram |
 | [Tech Stack](https://fiscalmindset.github.io/Synapse-Graph/tech_stack.html) | Dependencies |
 | [Demo](https://fiscalmindset.github.io/Synapse-Graph/video_scene.html) | Demo video |
 | [OpenMetadata](https://fiscalmindset.github.io/Synapse-Graph/openmetadata_usage.html) | Governance plane |
@@ -59,7 +59,7 @@ Turns model internals into **inspectable infrastructure** with familiar data-pla
 
 ## Interactive Architecture
 
-**[Click here to explore the architecture diagram](architecture.html)** — Click on any component to see details about implementation.
+**[Click here to explore the architecture diagram](https://fiscalmindset.github.io/Synapse-Graph/architecture.html)** — Click on any component to see details about implementation.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
