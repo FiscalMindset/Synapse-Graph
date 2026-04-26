@@ -302,3 +302,41 @@ Synapse-Graph/
 ## License
 
 MIT
+
+---
+
+## Connect
+
+<p align="center">
+  <img src="https://github.com/algsoch.png" alt="Vicky Kumar" width="100" style="border-radius:50%;border:3px solid #60d4ff;">
+</p>
+
+<h3 align="center">Vicky Kumar</h3>
+
+<p align="center">
+  <a href="https://www.linkedin.com/in/algsoch">
+    <img src="https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white" alt="LinkedIn">
+  </a>
+  <a href="https://www.github.com/algsoch">
+    <img src="https://img.shields.io/badge/GitHub-100000?style=for-the-badge&logo=github&logoColor=white" alt="GitHub Primary">
+  </a>
+  <a href="https://www.github.com/fiscalmindset">
+    <img src="https://img.shields.io/badge/GitHub-fiscalmindset-100000?style=for-the-badge&logo=github&logoColor=white" alt="GitHub Secondary">
+  </a>
+</p>
+
+<p align="center">
+  <a href="mailto:npdimagine@gmail.com">npdimagine@gmail.com</a> · 
+  <a href="tel:+918383848219">+91 8383848219</a>
+</p>
+
+<p align="center">
+  <strong>Project:</strong> 
+  <a href="https://github.com/FiscalMindset/Synapse-Graph">GitHub Repo</a> · 
+  <a href="https://fiscalmindset.github.io/Synapse-Graph/">Live Demo</a> · 
+  <a href="https://youtu.be/idOJYh6TUC8">YouTube Demo</a>
+</p>
+
+<p align="center">
+  <em>Built with ❤️ for AI Interpretability</em>
+</p>
