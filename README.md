@@ -338,5 +338,5 @@ MIT
 </p>
 
 <p align="center">
-  <em>Built with ❤️ for AI Interpretability</em>
+  <em>Built for AI Interpretability</em>
 </p>
