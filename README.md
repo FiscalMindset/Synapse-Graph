@@ -65,75 +65,59 @@ I realized that if we could apply **Mechanistic Interpretability** (finding the 
 
 ---
 
-<div style="background: linear-gradient(135deg, rgba(57,255,20,0.08), rgba(96,212,255,0.05)); border: 1px solid rgba(57,255,20,0.25); border-radius: 12px; padding: 32px 24px; margin: 24px 0; backdrop-filter: blur(10px); box-shadow: 0 8px 24px rgba(57,255,20,0.08);">
-
 ## ⚙️ Engineering Philosophy: How It Actually Works
 
-To achieve live neural surgery, Synapse-Graph abandons standard API wrappers and operates directly on the model's tensors. We solved this using a **three-part engineering architecture**:
+To achieve live neural surgery, Synapse-Graph abandons standard API wrappers and operates **directly on the model's tensors**. 
 
-<div style="display: grid; grid-template-columns: 1fr; gap: 16px; margin: 24px 0;">
+---
 
-<div style="background: linear-gradient(135deg, rgba(96,212,255,0.1), rgba(62,225,255,0.05)); border: 1px solid rgba(96,212,255,0.3); border-radius: 10px; padding: 20px; backdrop-filter: blur(10px); transition: all 0.3s ease;">
+### 🔍 Part 1: The PyTorch Shadow Tracer
 
-### 🔍 Part 1: The PyTorch Shadow Tracer (The Telemetry)
+**What it does:** Tap into the model's attention layers in real-time.
 
-Instead of just reading the final output, we inject `register_forward_hook` directly into the attention modules of the loaded Hugging Face model. As the generation runs, we **extract the exact multi-dimensional attention activations** (Layer-by-Layer, Head-by-Head) **without slowing down the inference**.
+We inject `register_forward_hook` into attention modules and capture:
+- Attention weight matrices (Layer × Head × Position)
+- Projection outputs
+- **Zero-overhead tracing** (no model slowdown)
 
-<div style="background: rgba(0,0,0,0.3); border-left: 3px solid #3ee1ff; border-radius: 6px; padding: 12px; margin-top: 12px; font-family: 'Courier New', monospace; font-size: 0.9em; color: #60d4ff;">
-Hook captures: Attention weights + Projection output → Zero overhead
-</div>
+```
+As the model generates tokens → we capture what each attention head "looked at"
+```
 
-</div>
+---
 
-<div style="background: linear-gradient(135deg, rgba(57,255,20,0.1), rgba(96,212,255,0.05)); border: 1px solid rgba(57,255,20,0.3); border-radius: 10px; padding: 20px; backdrop-filter: blur(10px); transition: all 0.3s ease;">
+### 🛡️ Part 2: The OpenMetadata Governance Layer
 
-### 🛡️ Part 2: The OpenMetadata Hack (The Governance)
+**What it does:** Map neural networks into enterprise data catalogs.
 
-AI neural networks don't fit into standard data catalogs. We engineered a **synthetic topology mapper** that translates a live neural network into a SQL database format:
+AI models don't fit standard schemas, so we built a synthetic mapper:
 
-<div style="background: rgba(0,0,0,0.3); border-radius: 8px; padding: 16px; margin-top: 12px;">
+| Neural | Maps To |
+|--------|---------|
+| 🧠 Model | 📦 Database |
+| 📊 Layers | 📋 Tables |
+| 🎯 Heads | 📌 Columns |
 
-<table style="width: 100%; color: #e6eef8; border-collapse: collapse;">
-<tr style="border-bottom: 1px solid rgba(57,255,20,0.2);">
-<td style="padding: 8px 12px; font-weight: 600; color: #60d4ff;">Model</td>
-<td style="padding: 8px 12px;">→ Database</td>
-</tr>
-<tr style="border-bottom: 1px solid rgba(57,255,20,0.2);">
-<td style="padding: 8px 12px; font-weight: 600; color: #60d4ff;">Transformer Layers</td>
-<td style="padding: 8px 12px;">→ Tables</td>
-</tr>
-<tr>
-<td style="padding: 8px 12px; font-weight: 600; color: #60d4ff;">Attention Heads</td>
-<td style="padding: 8px 12px;">→ Columns</td>
-</tr>
-</table>
+Result: **Neural thought paths become data lineage edges**. We can tag heads with `⛔ DEFECTIVE` and governance becomes automatic.
 
-</div>
+---
 
-This allows us to track **"Thought Lineage"** as standard data lineage edges, and use enterprise tagging to flag specific neurons.
+### ⚡ Part 3: Causal Ablation (Neural Surgery)
 
-</div>
+**What it does:** Find the exact circuit causing the problem.
 
-<div style="background: linear-gradient(135deg, rgba(255,107,107,0.1), rgba(255,137,137,0.05)); border: 1px solid rgba(255,107,107,0.3); border-radius: 10px; padding: 20px; backdrop-filter: blur(10px); transition: all 0.3s ease;">
+**The Process:**
+1. Suspect a head is causing hallucinations → Zero it out (set projection = 0)
+2. Re-run generation → Check if hallucinations drop
+3. Found the culprit? Tag as `DEFECTIVE` in OpenMetadata
+4. From now on → FastAPI proxy masks it automatically on all requests
 
-### ⚡ Part 3: Causal Ablation (The Surgery)
+**The Numbers:**
+- Cost: **$0** (no retraining)
+- Time: **Minutes** (not days)
+- Precision: **Exact neural circuit** (not "maybe the prompt?")
 
-**Correlation is not causation.** To prove a specific head is causing a hallucination, our backend runs an automated **$O(n^2)$ Ablation Sweep**:
-
-1. Systematically **zero out suspect heads** (multiply their projection matrices by `0.0`)
-2. Measure the **drop in hallucination probability**
-3. Once the causal head is found, tag it as `⛔ DEFECTIVE` in OpenMetadata
-4. Our FastAPI proxy **permanently masks it** on all future runs
-
-<div style="background: rgba(0,0,0,0.3); border-left: 3px solid #ff6b6b; border-radius: 6px; padding: 12px; margin-top: 12px; font-family: 'Courier New', monospace; font-size: 0.9em; color: #ff8787;">
-Cost: $0 (no retraining) | Time: Minutes | Precision: Exact neural circuit
-</div>
-
-</div>
-
-</div>
-
-</div>
+---
 
 ---
 
