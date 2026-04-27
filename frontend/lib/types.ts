@@ -43,6 +43,9 @@ export interface TokenStepCapture {
   layers: LayerActivation[];
   high_activation_path: string[];
   evidence_tokens: string[];
+  evidence_positions?: number[];
+  evidence_token_ids?: number[];
+  evidence_token_attention?: Record<number, number>;
   explanation?: string | null;
 }
 

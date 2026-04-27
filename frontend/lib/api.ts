@@ -368,3 +368,57 @@ export async function fetchParsedEvidence(table_fqn: string): Promise<any> {
 
   return await response.json();
 }
+
+export interface SessionSummary {
+  session_id: string;
+  created_at: string;
+  prompt: string;
+  response_text_preview: string;
+  path: string;
+}
+
+export async function fetchSessionList(): Promise<SessionSummary[]> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/sessions`, {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error(`Session list request failed: ${response.status}`);
+  }
+
+  const data = await response.json();
+  return data.sessions ?? [];
+}
+
+export async function fetchSession(sessionId: string): Promise<any> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/sessions/${encodeURIComponent(sessionId)}`, {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error(`Session fetch failed: ${response.status}`);
+  }
+
+  return await response.json();
+}
+
+export async function replaySession(
+  sessionId: string,
+  stream: boolean = false,
+): Promise<StateResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/v1/sessions/${encodeURIComponent(sessionId)}/replay?stream=${stream}`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(`Replay failed: ${response.status}`);
+  }
+
+  return await response.json();
+}

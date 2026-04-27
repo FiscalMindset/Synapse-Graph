@@ -337,12 +337,12 @@ class OpenMetadataNeuralMapper:
         self,
         catalog: NeuralCatalogBinding | None,
         session_id: str,
-        prompt: str,
+        prompt_or_meta: str | dict | None,
         step: TokenStepCapture,
     ) -> None:
         if not self.settings.openmetadata_enabled or catalog is None:
             return
-        await asyncio.to_thread(self._ingest_step_sync, catalog, session_id, prompt, step)
+        await asyncio.to_thread(self._ingest_step_sync, catalog, session_id, prompt_or_meta, step)
 
     def _ensure_catalog_sync(self, topology: ModelTopology) -> NeuralCatalogBinding:
         metadata = self._metadata_client()
@@ -533,10 +533,18 @@ class OpenMetadataNeuralMapper:
         self,
         catalog: NeuralCatalogBinding,
         session_id: str,
-        prompt: str,
+        prompt_or_meta: str | dict | None,
         step: TokenStepCapture,
     ) -> None:
         metadata = self._metadata_client()
+        # Normalize prompt text and session metadata (backwards-compatible)
+        if isinstance(prompt_or_meta, dict):
+            prompt_text = prompt_or_meta.get("prompt") or ""
+            session_meta = prompt_or_meta
+        else:
+            prompt_text = str(prompt_or_meta or "")
+            session_meta = None
+
         active_layers = [layer for layer in step.layers if layer.top_heads]
         if not active_layers:
             return
@@ -550,7 +558,7 @@ class OpenMetadataNeuralMapper:
                 source_columns=[catalog.prompt_table.column_fqns["Prompt_Text"]],
                 target_columns=self._resolve_active_target_columns(first_binding, active_layers[0]),
                 description=f"Prompt ingress into {active_layers[0].layer_name}",
-                sql_query=_build_synthetic_sql(session_id, prompt, step, active_layers[0].layer_name),
+                sql_query=_build_synthetic_sql(session_id, prompt_text, step, active_layers[0].layer_name, session_meta=session_meta),
             )
 
         for source_layer, target_layer in zip(active_layers, active_layers[1:]):
@@ -565,7 +573,7 @@ class OpenMetadataNeuralMapper:
                 source_columns=self._resolve_active_target_columns(source_binding, source_layer),
                 target_columns=self._resolve_active_target_columns(target_binding, target_layer),
                 description=f"{source_layer.layer_name} -> {target_layer.layer_name}",
-                sql_query=_build_synthetic_sql(session_id, prompt, step, target_layer.layer_name),
+                sql_query=_build_synthetic_sql(session_id, prompt_text, step, target_layer.layer_name, session_meta=session_meta),
             )
 
         last_layer = active_layers[-1]
@@ -578,7 +586,7 @@ class OpenMetadataNeuralMapper:
                 source_columns=self._resolve_active_target_columns(last_binding, last_layer),
                 target_columns=[catalog.response_table.column_fqns["Response_Text"]],
                 description=f"{last_layer.layer_name} -> response egress",
-                sql_query=_build_synthetic_sql(session_id, prompt, step, "Response_Egress"),
+                sql_query=_build_synthetic_sql(session_id, prompt_text, step, "Response_Egress", session_meta=session_meta),
             )
 
     def _resolve_active_target_columns(
@@ -887,6 +895,47 @@ def _parse_head_index(head_name: str | None) -> int | None:
     return int(match.group(1)) - 1
 
 
+def redact_for_storage(obj: Any) -> Any:
+    """Recursively redact obvious PII-like patterns from strings inside a payload.
+
+    This is intentionally conservative: it replaces email addresses, long
+    numeric sequences, SSN-like and credit-card-like groups, and trims
+    excessively long text to avoid accidental leakage into embedded metadata.
+    """
+    EMAIL_RE = re.compile(r"[\w\.-]+@[\w\.-]+\.\w+")
+    CC_RE = re.compile(r"\b(?:\d[ -]*?){13,19}\b")
+    SSN_RE = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
+    LONG_NUM_RE = re.compile(r"\b\d{7,}\b")
+    PHONE_RE = re.compile(r"\+?\d[\d\-\s]{6,}\d")
+
+    def _redact_text(s: str) -> str:
+        if not isinstance(s, str):
+            return s
+        s = EMAIL_RE.sub("<REDACTED_EMAIL>", s)
+        s = SSN_RE.sub("<REDACTED_SSN>", s)
+        s = CC_RE.sub("<REDACTED_NUMBER>", s)
+        s = LONG_NUM_RE.sub("<REDACTED_NUMBER>", s)
+        s = PHONE_RE.sub("<REDACTED_PHONE>", s)
+        if len(s) > 300:
+            return s[:300] + "...<TRUNCATED>"
+        return s
+
+    if isinstance(obj, dict):
+        out: dict[str, Any] = {}
+        for k, v in obj.items():
+            # Preserve numeric and structural fields intact
+            if k in ("session_id", "step_index", "evidence_positions", "evidence_token_attention"):
+                out[k] = v
+            else:
+                out[k] = redact_for_storage(v)
+        return out
+    if isinstance(obj, list):
+        return [redact_for_storage(v) for v in obj]
+    if isinstance(obj, str):
+        return _redact_text(obj)
+    return obj
+
+
 def _has_defective_tag(tags: list[dict[str, Any]], defective_tag_name: str) -> bool:
     normalized_target = defective_tag_name.replace("[", "").replace("]", "").upper()
     for tag_payload in tags:
@@ -910,30 +959,84 @@ def _build_synthetic_sql(
     prompt: str,
     step: TokenStepCapture,
     target_name: str,
+    session_meta: dict | None = None,
 ) -> str:
     # Human-readable preview fields
-    prompt_preview = prompt.replace("\n", " ")[:160]
+    prompt_preview = (prompt or "").replace("\n", " ")[:160]
     activation_path = step.high_activation_path[:6] or ["n/a"]
     evidence_tokens = step.evidence_tokens[:6] or ["n/a"]
     explanation = (step.explanation or "n/a").replace("\n", " ")[:220]
 
+    # Collect compact head activation summary and evidence positions
+    head_activations: list[dict[str, Any]] = []
+    evidence_positions: list[int] = []
+    try:
+        top_k = OpenMetadataSettings().openmetadata_lineage_top_heads_per_layer
+        for layer in getattr(step, "layers", []) or []:
+            for head in (getattr(layer, "top_heads", []) or [])[: top_k]:
+                head_activations.append(
+                    {
+                        "layer": getattr(layer, "layer_name", None),
+                        "head_index": getattr(head, "head_index", None),
+                        "head_name": getattr(head, "head_name", None),
+                        "max_attention_score": getattr(head, "max_attention_score", None),
+                    }
+                )
+                # collect positions if present
+                for pos in getattr(head, "top_source_positions", []) or []:
+                    try:
+                        evidence_positions.append(int(pos))
+                    except Exception:
+                        continue
+    except Exception:
+        head_activations = []
+
     # Structured metadata to embed in the lineage record so OpenMetadata UI
-    # or custom consumers can parse causal evidence easily.
-    meta = {
+    # or custom consumers can parse causal evidence easily. Merge in any
+    # provided session-level metadata (generation params, seed, etc.).
+    meta: dict[str, Any] = {
         "session_id": session_id,
         "step_index": int(step.step_index),
         "target": target_name,
         "prompt_preview": prompt_preview,
         "activation_path": activation_path,
         "evidence_tokens": evidence_tokens,
+        "evidence_positions": sorted(list(dict.fromkeys(evidence_positions))) if evidence_positions else [],
+        "head_activations": head_activations,
         "explanation": explanation,
     }
-    meta_json = json.dumps(meta, ensure_ascii=False)
 
-    # Embed both a compact JSON blob and legacy human-readable comments for
-    # maximum compatibility with OpenMetadata's lineage UI.
+    # Attach per-token attention aggregates if present on the step payload
+    try:
+        if getattr(step, "evidence_token_attention", None):
+            # Convert keys to ints if needed and include
+            meta["evidence_token_attention"] = {int(k): float(v) for k, v in getattr(step, "evidence_token_attention", {}).items()}
+    except Exception:
+        pass
+
+    if session_meta and isinstance(session_meta, dict):
+        # include generation request and session-supplied metadata under a
+        # reserved key to avoid collisions with existing fields
+        meta["generation_request"] = {
+            k: session_meta.get(k) for k in ("max_new_tokens", "temperature", "top_p", "trace_model_name", "system_prompt", "stop") if k in session_meta
+        }
+        if "_synapse_session_meta" in session_meta:
+            meta["session_meta"] = session_meta["_synapse_session_meta"]
+
+    # Redact PII-like content before embedding into lineage metadata
+    try:
+        redacted_meta = redact_for_storage(meta)
+    except Exception:
+        redacted_meta = meta
+
+    meta_json_full = json.dumps(redacted_meta, ensure_ascii=False)
+    meta_json_preview = (meta_json_full[:200] + "...") if len(meta_json_full) > 200 else meta_json_full
+    meta_b64 = base64.b64encode(meta_json_full.encode("utf-8")).decode("ascii")
+
+    # Embed base64-encoded JSON for robustness plus a short human preview
     return (
-        f"/* SYNAPSE_META: {meta_json} */\n"
+        f"/* SYNAPSE_META_B64: {meta_b64} */\n"
+        f"/* SYNAPSE_META: {meta_json_preview} */\n"
         f"-- Synapse-Graph synthetic lineage\n"
         f"-- session={session_id}\n"
         f"-- step={step.step_index}\n"

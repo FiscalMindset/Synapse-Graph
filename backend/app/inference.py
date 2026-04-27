@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 import inspect
 import json
 import logging
@@ -146,6 +147,9 @@ class TokenStepCapture(BaseModel):
     layers: list[LayerActivation] = Field(default_factory=list)
     high_activation_path: list[str] = Field(default_factory=list)
     evidence_tokens: list[str] = Field(default_factory=list)
+    evidence_positions: list[int] = Field(default_factory=list)
+    evidence_token_ids: list[int] = Field(default_factory=list)
+    evidence_token_attention: dict[int, float] = Field(default_factory=dict)
     explanation: str | None = None
 
 
@@ -215,6 +219,7 @@ class InferenceSettings(BaseSettings):
     ollama_health_timeout_seconds: float = 2.0
 
     hf_model_name: str = "Qwen/Qwen2.5-1.5B-Instruct"
+    trace_sampling_rate: float = Field(default=1.0, ge=0.0, le=1.0)
     hf_revision: str | None = None
     hf_token: str | None = None
     hf_local_files_only: bool = False
@@ -483,17 +488,36 @@ class HookedTransformerRunner:
                         generated_text_parts.append(token_text)
                         trace.generated_text += token_text
 
-                    step_capture = self._build_step_capture(
-                        step_index=step_index,
-                        generated_token=token_text,
-                        generated_token_id=next_token_id,
-                        prompt_plus_generation_length=prompt_token_count + step_index + 1,
-                        context_tokens=_format_token_window(
-                            tokenizer,
-                            input_ids[0].detach().to(device="cpu").tolist(),
-                            self._settings.capture_context_window,
-                        ),
-                    )
+                    # Optionally sample detailed trace captures to reduce overhead.
+                    should_capture = random.random() < getattr(self._settings, "trace_sampling_rate", 1.0)
+                    if should_capture:
+                        step_capture = self._build_step_capture(
+                            step_index=step_index,
+                            generated_token=token_text,
+                            generated_token_id=next_token_id,
+                            prompt_plus_generation_length=prompt_token_count + step_index + 1,
+                            context_tokens=_format_token_window(
+                                tokenizer,
+                                input_ids[0].detach().to(device="cpu").tolist(),
+                                self._settings.capture_context_window,
+                            ),
+                        )
+                    else:
+                        # Create a minimal placeholder capture so step indices remain consistent
+                        step_capture = TokenStepCapture(
+                            step_index=step_index,
+                            generated_token=token_text,
+                            generated_token_id=next_token_id,
+                            prompt_plus_generation_length=prompt_token_count + step_index + 1,
+                            masked_heads=[],
+                            layers=[],
+                            high_activation_path=[],
+                            evidence_tokens=[],
+                            evidence_positions=[],
+                            evidence_token_ids=[],
+                            evidence_token_attention={},
+                            explanation=None,
+                        )
                     trace.steps.append(step_capture)
 
                     if step_listener is not None:
@@ -848,6 +872,64 @@ class HookedTransformerRunner:
             for token in layer.dominant_source_tokens
         )[:6]
 
+        # Collect evidence positions (token indices) from top heads
+        evidence_positions_list: list[int] = []
+        try:
+            for layer in ranked_layers[:3]:
+                for head in (layer.top_heads or [])[:3]:
+                    for pos in (head.top_source_positions or []):
+                        try:
+                            evidence_positions_list.append(int(pos))
+                        except Exception:
+                            continue
+        except Exception:
+            evidence_positions_list = []
+
+        # Deduplicate while preserving order and cap list size
+        seen_pos = set()
+        evidence_positions: list[int] = []
+        for p in evidence_positions_list:
+            if p not in seen_pos:
+                seen_pos.add(p)
+                evidence_positions.append(p)
+            if len(evidence_positions) >= 12:
+                break
+
+        # Aggregate per-token attention weights from top heads (max across heads)
+        evidence_token_attention: dict[int, float] = {}
+        try:
+            for layer in ranked_layers[:3]:
+                for head in (layer.top_heads or [])[:3]:
+                    raw_att = getattr(head, "raw_last_token_attention", None) or []
+                    for pos in (head.top_source_positions or []):
+                        try:
+                            pos_int = int(pos)
+                            if 0 <= pos_int < len(raw_att):
+                                weight = float(raw_att[pos_int])
+                                prev = evidence_token_attention.get(pos_int, 0.0)
+                                if weight > prev:
+                                    evidence_token_attention[pos_int] = weight
+                        except Exception:
+                            continue
+        except Exception:
+            evidence_token_attention = {}
+
+        # Attempt to map evidence token text to tokenizer ids when available
+        evidence_token_ids: list[int] = []
+        try:
+            tokenizer = getattr(self, "_tokenizer", None)
+            if tokenizer is not None and evidence_tokens:
+                for tok in evidence_tokens:
+                    try:
+                        ids = tokenizer.encode(tok, add_special_tokens=False)
+                        evidence_token_ids.append(int(ids[0]) if ids else -1)
+                    except Exception:
+                        evidence_token_ids.append(-1)
+            else:
+                evidence_token_ids = []
+        except Exception:
+            evidence_token_ids = []
+
         return TokenStepCapture(
             step_index=step_index,
             generated_token=generated_token,
@@ -857,6 +939,9 @@ class HookedTransformerRunner:
             layers=layers,
             high_activation_path=high_activation_path,
             evidence_tokens=evidence_tokens,
+            evidence_positions=evidence_positions,
+            evidence_token_ids=evidence_token_ids,
+            evidence_token_attention=evidence_token_attention,
             explanation=_build_step_explanation(
                 generated_token=generated_token,
                 ranked_layers=ranked_layers,

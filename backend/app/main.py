@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
+from pathlib import Path
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,7 +29,10 @@ from .inference import (
     NeuralInferenceEngine,
     TraceExecutionMode,
 )
+import random
+import torch
 from .om_client import NeuralCatalogBinding, OpenMetadataNeuralMapper, OpenMetadataSettings
+from .om_client import redact_for_storage
 
 LOGGER = logging.getLogger(__name__)
 
@@ -212,6 +216,16 @@ class NeuralProxyRuntime:
         self._last_ingest_error: str | None = None
         self._openmetadata_connected: bool = False
         self._preload_task: asyncio.Task[Any] | None = None
+        # Session persistence directory
+        self._session_dir: Path = Path("artifacts/sessions")
+        try:
+            self._session_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            LOGGER.exception("Could not create session artifacts directory")
+
+        # Reindex queue / background worker for processedLineage retries
+        self._reindex_pending: dict[str, int] = {}
+        self._reindex_task: asyncio.Task[Any] | None = None
 
     async def startup(self) -> None:
         await self.inference.startup()
@@ -228,6 +242,9 @@ class NeuralProxyRuntime:
         # configured HF model and the configured fallback inside the tracer.
         if not self._preload_task:
             self._preload_task = asyncio.create_task(self._background_preload())
+        # Start background reindex worker if OM enabled
+        if self.openmetadata_settings.openmetadata_enabled and not self._reindex_task:
+            self._reindex_task = asyncio.create_task(self._background_reindex_worker())
 
     async def _background_preload(self) -> None:
         try:
@@ -266,8 +283,64 @@ class NeuralProxyRuntime:
             self._preload_task.cancel()
             with suppress(asyncio.CancelledError):
                 await self._preload_task
+        if self._reindex_task is not None:
+            self._reindex_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._reindex_task
         await self.openmetadata.close()
         await self.inference.shutdown()
+
+    def enqueue_reindex(self, table_fqn: str) -> None:
+        # Schedule a table for background processedLineage attempts
+        if not table_fqn:
+            return
+        self._reindex_pending.setdefault(table_fqn, 0)
+
+    async def _background_reindex_worker(self) -> None:
+        # Periodically retry marking lineage processed for pending tables
+        try:
+            while True:
+                if not self._reindex_pending:
+                    await asyncio.sleep(5.0)
+                    continue
+
+                to_check = list(self._reindex_pending.items())
+                for table_fqn, attempts in to_check:
+                    try:
+                        LOGGER.info("Reindex worker attempting processedLineage for %s (attempt=%d)", table_fqn, attempts + 1)
+                        resp = await self.openmetadata._request_with_managed_auth(
+                            "PATCH",
+                            f"/v1/tables/name/{quote(table_fqn, safe='')}",
+                            json={"processedLineage": True},
+                        )
+                        if resp.status_code < 400:
+                            LOGGER.info("Reindex worker: marked processedLineage for %s", table_fqn)
+                            self._reindex_pending.pop(table_fqn, None)
+                            continue
+
+                        # Try triggering search/index refresh as fallback
+                        resp2 = await self.openmetadata._request_with_managed_auth("POST", "/v1/search/index", json={"query": table_fqn})
+                        if resp2.status_code < 400:
+                            LOGGER.info("Reindex worker: triggered search/index for %s", table_fqn)
+                            self._reindex_pending.pop(table_fqn, None)
+                            continue
+
+                        # Bump attempt count and give up after N tries
+                        self._reindex_pending[table_fqn] = attempts + 1
+                        if self._reindex_pending[table_fqn] >= 6:
+                            LOGGER.warning("Reindex worker giving up on %s after %d attempts", table_fqn, self._reindex_pending[table_fqn])
+                            self._reindex_pending.pop(table_fqn, None)
+                    except Exception:
+                        LOGGER.exception("Reindex worker error for %s", table_fqn)
+                        self._reindex_pending[table_fqn] = self._reindex_pending.get(table_fqn, 0) + 1
+                        if self._reindex_pending[table_fqn] >= 6:
+                            self._reindex_pending.pop(table_fqn, None)
+
+                await asyncio.sleep(3.0)
+        except asyncio.CancelledError:
+            LOGGER.debug("Reindex worker cancelled; exiting")
+        except Exception:
+            LOGGER.exception("Reindex worker terminated unexpectedly")
 
     async def get_state(self) -> StateResponse:
         topology, catalog = await self.ensure_topology()
@@ -866,10 +939,26 @@ class NeuralProxyRuntime:
         masked_heads = await self.sync_defective_heads(catalog)
         session_id = str(uuid4())
 
+        # Create a reproducible seed for this session and record session metadata
+        session_seed = int.from_bytes(__import__("os").urandom(8), "big") & ((1 << 63) - 1)
+        random.seed(session_seed)
+        try:
+            torch.manual_seed(session_seed)
+        except Exception:
+            pass
+
+        session_meta = request.model_dump(mode="json")
+        session_meta = dict(session_meta)
+        session_meta["_synapse_session_meta"] = {
+            "generation_seed": session_seed,
+            "generation_model": getattr(self.inference.settings, "hf_model_name", None),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
         async def step_listener(step: Any) -> None:
             if catalog is None:
                 return
-            self._schedule_lineage_ingest(catalog, session_id, request.prompt, step)
+            self._schedule_lineage_ingest(catalog, session_id, session_meta, step)
 
         response = await self.inference.generate(request, step_listener=step_listener)
         session = SessionSnapshot(
@@ -881,6 +970,20 @@ class NeuralProxyRuntime:
             masked_heads=masked_heads,
         )
         self._latest_session = session
+        # Persist session artifact for later retrieval
+        try:
+            path = self._session_dir / f"{session_id}.json"
+            session_payload = session.model_dump(mode="json")
+            # include original request/session metadata for reproducible replay
+            session_payload["session_meta"] = session_meta
+            try:
+                redacted = redact_for_storage(session_payload)
+            except Exception:
+                redacted = session_payload
+            with path.open("w", encoding="utf-8") as fh:
+                json.dump(redacted, fh, ensure_ascii=False, indent=2)
+        except Exception:
+            LOGGER.exception("Failed to persist session %s", session_id)
 
         return GenerateResponse(
             session_id=session_id,
@@ -897,6 +1000,22 @@ class NeuralProxyRuntime:
         session_id = str(uuid4())
         event_queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue()
 
+        # Create reproducible seed and session metadata for streamed runs
+        session_seed = int.from_bytes(__import__("os").urandom(8), "big") & ((1 << 63) - 1)
+        random.seed(session_seed)
+        try:
+            torch.manual_seed(session_seed)
+        except Exception:
+            pass
+
+        session_meta = request.model_dump(mode="json")
+        session_meta = dict(session_meta)
+        session_meta["_synapse_session_meta"] = {
+            "generation_seed": session_seed,
+            "generation_model": getattr(self.inference.settings, "hf_model_name", None),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
         async def step_listener(step: Any) -> None:
             await event_queue.put(
                 (
@@ -908,7 +1027,7 @@ class NeuralProxyRuntime:
                 )
             )
             if catalog is not None:
-                self._schedule_lineage_ingest(catalog, session_id, request.prompt, step)
+                self._schedule_lineage_ingest(catalog, session_id, session_meta, step)
 
         async def producer() -> None:
             output_chunks: list[str] = []
@@ -936,6 +1055,18 @@ class NeuralProxyRuntime:
                             masked_heads=masked_heads,
                         )
                         self._latest_session = session
+                        try:
+                            path = self._session_dir / f"{session_id}.json"
+                            session_payload = session.model_dump(mode="json")
+                            session_payload["session_meta"] = session_meta
+                            try:
+                                redacted = redact_for_storage(session_payload)
+                            except Exception:
+                                redacted = session_payload
+                            with path.open("w", encoding="utf-8") as fh:
+                                json.dump(redacted, fh, ensure_ascii=False, indent=2)
+                        except Exception:
+                            LOGGER.exception("Failed to persist streamed session %s", session_id)
                         await event_queue.put(
                             (
                                 "done",
@@ -992,10 +1123,10 @@ class NeuralProxyRuntime:
         self,
         catalog: NeuralCatalogBinding,
         session_id: str,
-        prompt: str,
+        session_meta: dict[str, Any] | None,
         step: Any,
     ) -> None:
-        task = asyncio.create_task(self._ingest_lineage_task(catalog, session_id, prompt, step))
+        task = asyncio.create_task(self._ingest_lineage_task(catalog, session_id, session_meta, step))
         self._lineage_tasks.add(task)
         task.add_done_callback(self._lineage_tasks.discard)
 
@@ -1003,11 +1134,11 @@ class NeuralProxyRuntime:
         self,
         catalog: NeuralCatalogBinding,
         session_id: str,
-        prompt: str,
+        session_meta: dict[str, Any] | None,
         step: Any,
     ) -> None:
         try:
-            await self.openmetadata.ingest_step(catalog, session_id, prompt, step)
+            await self.openmetadata.ingest_step(catalog, session_id, session_meta, step)
             self._openmetadata_connected = True
             self._last_ingest_error = None
             return
@@ -1021,7 +1152,7 @@ class NeuralProxyRuntime:
             LOGGER.info("Attempting OpenMetadata catalog refresh and retrying lineage ingest.")
             topology, refreshed_catalog = await self.ensure_topology()
             if refreshed_catalog is not None:
-                await self.openmetadata.ingest_step(refreshed_catalog, session_id, prompt, step)
+                await self.openmetadata.ingest_step(refreshed_catalog, session_id, session_meta, step)
                 self._openmetadata_connected = True
                 self._last_ingest_error = None
                 LOGGER.info("OpenMetadata lineage ingest succeeded after catalog refresh.")
@@ -1084,6 +1215,132 @@ async def bootstrap_openmetadata() -> StateResponse:
         latest_session=runtime._latest_session,
         masked_heads=runtime.inference.get_masked_heads(),
         ollama_available=await runtime.inference.is_ollama_available(),
+        openmetadata=runtime._openmetadata_status(catalog_ready=catalog is not None),
+    )
+
+
+@app.get("/api/v1/sessions")
+async def list_sessions() -> dict[str, Any]:
+    """List persisted session artifacts with light summaries."""
+    out: list[dict[str, Any]] = []
+    try:
+        session_dir = runtime._session_dir
+        for p in sorted(session_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+            try:
+                with p.open("r", encoding="utf-8") as fh:
+                    payload = json.load(fh)
+                out.append(
+                    {
+                        "session_id": payload.get("session_id") or p.stem,
+                        "created_at": payload.get("created_at"),
+                        "prompt": (payload.get("prompt") or "")[:200],
+                        "response_text_preview": (payload.get("response_text") or "")[:300],
+                        "path": str(p.relative_to(Path.cwd())),
+                    }
+                )
+            except Exception:
+                LOGGER.exception("Failed to read session artifact %s", p)
+    except Exception:
+        LOGGER.exception("Failed to list session artifacts")
+
+    return {"sessions": out}
+
+
+@app.get("/api/v1/sessions/{session_id}")
+async def get_session(session_id: str) -> dict[str, Any]:
+    """Return the persisted session artifact JSON for a given session id."""
+    try:
+        path = runtime._session_dir / f"{session_id}.json"
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="Session not found")
+        with path.open("r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        LOGGER.exception("Failed to load session %s", session_id)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/v1/sessions/{session_id}/replay")
+async def replay_session(session_id: str, stream: bool = False, execution_mode: TraceExecutionMode = TraceExecutionMode.FAITHFUL) -> Any:
+    """Replay a previously persisted session deterministically when possible.
+
+    The original session must contain `session_meta` (stored at generation time).
+    Replay will attempt to re-use the original `_synapse_session_meta.generation_seed`
+    for reproducibility. Returns a `GenerateResponse` or streams tokens when
+    `stream=true`.
+    """
+    try:
+        path = runtime._session_dir / f"{session_id}.json"
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="Session not found")
+        with path.open("r", encoding="utf-8") as fh:
+            payload = json.load(fh)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        LOGGER.exception("Failed to load session for replay %s", session_id)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    session_meta = payload.get("session_meta")
+    if not isinstance(session_meta, dict):
+        raise HTTPException(status_code=400, detail="Session metadata not available for replay")
+
+    # Reconstruct a GenerationRequest from the saved session_meta
+    req_kwargs: dict[str, Any] = {}
+    for key in ("prompt", "system_prompt", "max_new_tokens", "temperature", "top_p", "stop", "trace_model_name"):
+        if key in session_meta:
+            req_kwargs[key] = session_meta.get(key)
+
+    req_kwargs.setdefault("prompt", payload.get("prompt") or session_meta.get("prompt") or "")
+    req_kwargs.setdefault("stream", False)
+    req_kwargs.setdefault("execution_mode", execution_mode)
+
+    try:
+        regen_request = GenerationRequest(**req_kwargs)
+    except Exception as exc:
+        LOGGER.exception("Failed to reconstruct GenerationRequest for replay %s: %s", session_id, exc)
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    # If a seed was recorded, set it to reproduce RNG state (best-effort)
+    seed = None
+    try:
+        seed = session_meta.get("_synapse_session_meta", {}).get("generation_seed")
+    except Exception:
+        seed = None
+
+    await runtime._select_trace_model(regen_request)
+    topology, catalog = await runtime.ensure_topology()
+    masked_heads = await runtime.sync_defective_heads(catalog)
+
+    # Use the recorded seed when available for best-effort deterministic replay
+    if seed is not None:
+        import os as _os
+        import random as _random
+        try:
+            _random.seed(int(seed))
+        except Exception:
+            pass
+        try:
+            import torch as _torch
+
+            if hasattr(_torch, "manual_seed"):
+                _torch.manual_seed(int(seed))
+        except Exception:
+            pass
+
+    if stream:
+        return await runtime.stream_response(regen_request)
+
+    # Synchronous replay generation
+    response = await runtime.inference.generate(regen_request)
+
+    return GenerateResponse(
+        session_id=str(uuid4()),
+        response=response,
+        masked_heads=masked_heads,
+        topology=topology,
         openmetadata=runtime._openmetadata_status(catalog_ready=catalog is not None),
     )
 
@@ -1303,14 +1560,24 @@ async def parsed_evidence(table_fqn: str, up_depth: int = 1, down_depth: int = 1
 
                 parsed_meta = None
                 if isinstance(sql, str):
-                    import re, json as _json
+                    import re, json as _json, base64 as _b64
 
-                    m = re.search(r"/\*\s*SYNAPSE_META:\s*(\{.*?\})\s*\*/", sql, flags=re.DOTALL)
-                    if m:
+                    # Prefer robust base64-encoded metadata when present
+                    m_b64 = re.search(r"/\*\s*SYNAPSE_META_B64:\s*([A-Za-z0-9+/=\n\r\s]+)\s*\*/", sql, flags=re.DOTALL)
+                    if m_b64:
                         try:
-                            parsed_meta = _json.loads(m.group(1))
+                            b64_content = m_b64.group(1).strip()
+                            decoded = _b64.b64decode(b64_content)
+                            parsed_meta = _json.loads(decoded.decode("utf-8"))
                         except Exception:
-                            parsed_meta = {"_parse_error": "invalid json", "raw": m.group(1)}
+                            parsed_meta = {"_parse_error": "invalid base64 or json", "raw": m_b64.group(1)}
+                    else:
+                        m = re.search(r"/\*\s*SYNAPSE_META:\s*(\{.*?\})\s*\*/", sql, flags=re.DOTALL)
+                        if m:
+                            try:
+                                parsed_meta = _json.loads(m.group(1))
+                            except Exception:
+                                parsed_meta = {"_parse_error": "invalid json", "raw": m.group(1)}
 
                 results.append(
                     {
@@ -1425,6 +1692,12 @@ async def mark_lineage_processed(table_fqns: list[str]) -> dict[str, Any]:
 
         entry["success"] = success
         results.append(entry)
+        if not success:
+            # Schedule background retries in case immediate strategies failed
+            try:
+                runtime.enqueue_reindex(table_fqn)
+            except Exception:
+                LOGGER.exception("Failed to enqueue %s for background reindex", table_fqn)
 
     return {"results": results}
 
