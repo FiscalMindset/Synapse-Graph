@@ -33,33 +33,34 @@
 
 ---
 
-<div style="background: linear-gradient(135deg, rgba(96,212,255,0.08), rgba(62,225,255,0.05)); border: 1px solid rgba(96,212,255,0.25); border-radius: 12px; padding: 32px 24px; margin: 24px 0; backdrop-filter: blur(10px); box-shadow: 0 8px 24px rgba(96,212,255,0.08);">
+<div style="background: linear-gradient(135deg, rgba(96,212,255,0.08), rgba(11,18,32,0.18)); border: 1px solid rgba(96,212,255,0.22); border-radius: 16px; padding: 28px 24px; margin: 24px 0; box-shadow: 0 10px 28px rgba(0,0,0,0.12);">
 
 ## 💡 The Motivation: Breaking the Black Box
 
-The idea for Synapse-Graph came from a deep frustration with current AI observability tools. Today, if an LLM hallucinates or goes off-script, developers only have two terrible options:
+Synapse-Graph started from a simple frustration: when an LLM hallucinates, most teams are still left choosing between two bad fixes.
 
-<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 20px 0;">
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <div style="background: rgba(15,25,45,0.72); border: 1px solid rgba(96,212,255,0.22); border-left: 4px solid #60d4ff; border-radius: 12px; padding: 16px;">
+        <strong style="color: #60d4ff;">1. Prompt Engineering</strong><br/>
+        <span style="color: #aab6cc;">Ask the system prompt to behave better and hope the next response cooperates.</span>
+      </div>
+    </td>
+    <td width="50%" valign="top">
+      <div style="background: rgba(15,25,45,0.72); border: 1px solid rgba(255,107,107,0.22); border-left: 4px solid #ff6b6b; border-radius: 12px; padding: 16px;">
+        <strong style="color: #ff6b6b;">2. Retraining / Fine-tuning</strong><br/>
+        <span style="color: #aab6cc;">Spend compute and engineering time to train the bad behavior out of the model.</span>
+      </div>
+    </td>
+  </tr>
+</table>
 
-<div style="background: rgba(15,25,45,0.6); border-left: 3px solid #60d4ff; border-radius: 8px; padding: 16px; backdrop-filter: blur(10px);">
-<strong style="color: #60d4ff;">❌ Prompt Engineering</strong>
-<div style="color: #a0b0c8; font-size: 0.95em; margin-top: 8px;">Begging the AI to behave in the system prompt</div>
+Most observability tools only inspect the surface area of the model: prompts, tokens, latency, and logs. Synapse-Graph treats the AI like an engine, not a black box. If a spark plug misfires, you do not replace the entire car; you identify the exact component and fix it.
+
+<div style="background: rgba(62,225,255,0.08); border: 1px solid rgba(96,212,255,0.25); border-radius: 12px; padding: 16px 18px; margin: 18px 0 0; color: #e8f1fb;">
+<strong style="color: #3ee1ff;">Core idea:</strong> combine <strong>Mechanistic Interpretability</strong> with <strong>Enterprise Data Governance</strong> so hallucinations can be traced, explained, and corrected in real time without retraining.
 </div>
-
-<div style="background: rgba(15,25,45,0.6); border-left: 3px solid #ff6b6b; border-radius: 8px; padding: 16px; backdrop-filter: blur(10px);">
-<strong style="color: #ff6b6b;">💸 Retraining/Fine-tuning</strong>
-<div style="color: #a0b0c8; font-size: 0.95em; margin-top: 8px;">Spending thousands of dollars on compute</div>
-</div>
-
-</div>
-
-Current observability platforms (like LangSmith or Arize) only look at the *surface*—prompts, tokens, and latency. They treat the AI like a **black box**. I wanted to build a tool that treats the AI like an **engine**. 
-
-<div style="background: rgba(62,225,255,0.1); border: 1px solid rgba(96,212,255,0.3); border-radius: 10px; padding: 16px; margin: 20px 0; color: #e6eef8;">
-<strong style="color: #3ee1ff;">🔧 The Core Insight:</strong> If a spark plug misfires, you don't replace the whole car; you find the <span style="color: #60d4ff; font-weight: 600;">exact spark plug</span> and fix it.
-</div>
-
-I realized that if we could apply **Mechanistic Interpretability** (finding the exact neural circuits causing a behavior) and tie it to **Enterprise Data Governance** (OpenMetadata), we could **fix hallucinations in real-time, at zero cost, without retraining**.
 
 </div>
 
@@ -67,55 +68,42 @@ I realized that if we could apply **Mechanistic Interpretability** (finding the 
 
 ## ⚙️ Engineering Philosophy: How It Actually Works
 
-To achieve live neural surgery, Synapse-Graph abandons standard API wrappers and operates **directly on the model's tensors**. 
+Synapse-Graph performs live neural surgery by operating directly on model tensors instead of wrapping the API surface.
 
----
+### 1. 🔍 The PyTorch Shadow Tracer
 
-### 🔍 Part 1: The PyTorch Shadow Tracer
+The tracer uses `register_forward_hook` on attention modules to observe generation as it happens.
 
-**What it does:** Tap into the model's attention layers in real-time.
+- Captures attention matrices at the layer, head, and position level
+- Records projection outputs during inference
+- Keeps tracing lightweight enough to run alongside generation
 
-We inject `register_forward_hook` into attention modules and capture:
-- Attention weight matrices (Layer × Head × Position)
-- Projection outputs
-- **Zero-overhead tracing** (no model slowdown)
+### 2. 🛡️ The OpenMetadata Governance Layer
 
-```
-As the model generates tokens → we capture what each attention head "looked at"
-```
+We map neural structure into familiar catalog primitives so the model can be governed like enterprise data.
 
----
+| Neural Concept | OpenMetadata Representation |
+|---|---|
+| Model | Database |
+| Transformer layers | Tables |
+| Attention heads | Columns |
 
-### 🛡️ Part 2: The OpenMetadata Governance Layer
+That mapping turns thought paths into lineage edges, making it possible to tag specific heads as `DEFECTIVE` and feed that signal back into runtime control.
 
-**What it does:** Map neural networks into enterprise data catalogs.
+### 3. ⚡ Causal Ablation
 
-AI models don't fit standard schemas, so we built a synthetic mapper:
+Correlation is not causation, so the backend runs an automated $O(n^2)$ ablation sweep to isolate the exact circuit responsible for the behavior.
 
-| Neural | Maps To |
-|--------|---------|
-| 🧠 Model | 📦 Database |
-| 📊 Layers | 📋 Tables |
-| 🎯 Heads | 📌 Columns |
+1. Identify a suspicious head
+2. Zero its projection output and re-run the generation
+3. Measure whether the hallucination rate drops
+4. Promote the confirmed culprit to `DEFECTIVE` in OpenMetadata and mask it in the FastAPI proxy on future requests
 
-Result: **Neural thought paths become data lineage edges**. We can tag heads with `⛔ DEFECTIVE` and governance becomes automatic.
+The result is a debugging loop that is:
 
----
-
-### ⚡ Part 3: Causal Ablation (Neural Surgery)
-
-**What it does:** Find the exact circuit causing the problem.
-
-**The Process:**
-1. Suspect a head is causing hallucinations → Zero it out (set projection = 0)
-2. Re-run generation → Check if hallucinations drop
-3. Found the culprit? Tag as `DEFECTIVE` in OpenMetadata
-4. From now on → FastAPI proxy masks it automatically on all requests
-
-**The Numbers:**
-- Cost: **$0** (no retraining)
-- Time: **Minutes** (not days)
-- Precision: **Exact neural circuit** (not "maybe the prompt?")
+- **Targeted** rather than speculative
+- **Deterministic** rather than anecdotal
+- **Cheap to operate** because it avoids retraining
 
 ---
 
