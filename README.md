@@ -2,6 +2,8 @@
 
 <div align="center">
 
+![Synapse-Graph Logo](logo.png)
+
 **Turn LLM internals into observable, governable infrastructure**
 
 [![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-Live-blue?style=for-the-badge)](https://fiscalmindset.github.io/Synapse-Graph/)
@@ -59,7 +61,7 @@ Synapse-Graph started from a simple frustration: when an LLM hallucinates, most 
 Most observability tools only inspect the surface area of the model: prompts, tokens, latency, and logs. Synapse-Graph treats the AI like an engine, not a black box. If a spark plug misfires, you do not replace the entire car; you identify the exact component and fix it.
 
 <div style="background: rgba(62,225,255,0.08); border: 1px solid rgba(96,212,255,0.25); border-radius: 12px; padding: 16px 18px; margin: 18px 0 0; color: #e8f1fb;">
-<strong style="color: #3ee1ff;">Core idea:</strong> combine <strong>Mechanistic Interpretability</strong> with <strong>Enterprise Data Governance</strong> so hallucinations can be traced, explained, and corrected in real time without retraining.
+<strong style="color: #3ee1ff;">Core idea:</strong> combine <strong style="color: #3ee1ff; text-decoration: underline wavy #ff9500; text-underline-offset: 3px;">Mechanistic Interpretability</strong> with <strong>Enterprise Data Governance</strong> so hallucinations can be traced, explained, and corrected in real time without retraining.
 </div>
 
 </div>

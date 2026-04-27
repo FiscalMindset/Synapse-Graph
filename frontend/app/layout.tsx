@@ -19,6 +19,9 @@ const jetBrainsMono = JetBrains_Mono({
 export const metadata: Metadata = {
   title: "Synapse-Graph",
   description: "The LLM Glassbox for real-time neural lineage tracing.",
+  icons: {
+    icon: "/favicon.png",
+  },
 };
 
 export default function RootLayout({
