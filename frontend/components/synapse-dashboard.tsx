@@ -17,6 +17,8 @@ import {
   setLocalHeadMask,
   streamGeneration,
   syncOpenMetadataDefects,
+  fetchCatalogDetail,
+  fetchParsedEvidence,
 } from "@/lib/api";
 import type {
   AttentionTrace,
@@ -91,6 +93,10 @@ export function SynapseDashboard() {
   const [quarantineTotal, setQuarantineTotal] = useState<number>(0);
   const [discoverTopK, setDiscoverTopK] = useState<number>(3);
   const [discoverPairSweeps, setDiscoverPairSweeps] = useState<number>(3);
+  const [isSyncingDefects, setIsSyncingDefects] = useState(false);
+  const [systemEditable, setSystemEditable] = useState(false);
+  const [systemChatVisible, setSystemChatVisible] = useState(false);
+  const [systemChatInput, setSystemChatInput] = useState("");
 
   function appendLog(channel: string, message: string, detail?: string) {
     setLogs((current) => {
@@ -156,17 +162,19 @@ export function SynapseDashboard() {
   }
 
   async function handleSyncDefects() {
+    setIsSyncingDefects(true);
     try {
-      const nextState = await syncOpenMetadataDefects();
-      setState(nextState);
-      appendLog(
-        "SYNC",
-        `Synchronized ${nextState.masked_heads.length} defective heads from OpenMetadata.`,
-      );
+      // Perform canonical sync then refresh the full runtime state to ensure UI consistency
+      await syncOpenMetadataDefects();
+      const refreshed = await fetchState();
+      setState(refreshed);
+      appendLog("SYNC", `Synchronized ${refreshed.masked_heads.length} defective heads from OpenMetadata.`);
     } catch (syncError) {
       const message = syncError instanceof Error ? syncError.message : "Defect sync failed.";
       setError(message);
       appendLog("ERROR", "OpenMetadata defect sync failed.", message);
+    } finally {
+      setIsSyncingDefects(false);
     }
   }
 
@@ -565,9 +573,12 @@ export function SynapseDashboard() {
                 <button
                   type="button"
                   onClick={handleSyncDefects}
-                  className="border border-line bg-panel2 px-3 py-2 text-xs uppercase tracking-[0.22em] text-zinc-200 transition hover:border-accent hover:text-accent"
+                  disabled={isSyncingDefects}
+                  className={`border border-line bg-panel2 px-3 py-2 text-xs uppercase tracking-[0.22em] transition ${
+                    isSyncingDefects ? "text-muted cursor-not-allowed" : "text-zinc-200 hover:border-accent hover:text-accent"
+                  }`}
                 >
-                  Sync Defects
+                  {isSyncingDefects ? "Syncing..." : "Sync Defects"}
                 </button>
               </div>
 
@@ -670,16 +681,121 @@ export function SynapseDashboard() {
                 </div>
 
                 <label className="block">
-                  <span className="panel-label">System Prompt</span>
-                  <textarea
-                    value={systemPrompt}
-                    onChange={(event) => setSystemPrompt(event.target.value)}
-                    className="mt-2 h-28 w-full resize-none rounded-sm border border-line bg-panel2 px-3 py-3 text-sm text-zinc-100 outline-none transition focus:border-accent"
-                  />
+                  <div className="flex items-center justify-between">
+                    <span className="panel-label">System Prompt</span>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setSystemChatVisible((v) => !v)}
+                        className="rounded-sm border border-line bg-panel px-2 py-1 text-xs text-zinc-200 hover:border-accent"
+                      >
+                        {systemChatVisible ? "Hide Chat" : "Chat"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSystemEditable((e) => !e)}
+                        className="rounded-sm border border-accent/30 bg-accent/8 px-2 py-1 text-xs text-accent"
+                      >
+                        {systemEditable ? "Save" : "Edit"}
+                      </button>
+                    </div>
+                  </div>
+
+                  {systemEditable ? (
+                    <textarea
+                      value={systemPrompt}
+                      onChange={(event) => setSystemPrompt(event.target.value)}
+                      className="mt-2 h-28 w-full resize-none rounded-sm border border-line bg-panel2 px-3 py-3 text-sm text-zinc-100 outline-none transition focus:border-accent"
+                    />
+                  ) : (
+                    <div className="mt-2 rounded-sm border border-line bg-panel2 p-3 text-sm text-zinc-100 whitespace-pre-wrap">
+                      {systemPrompt}
+                    </div>
+                  )}
+
                   <p className="mt-2 text-xs leading-5 text-muted">
                     Sets the model role/instructions. Instruction-tuned models follow this better than
-                    base GPT-2 models.
+                    base GPT-2 models. Editing is disabled by default; click Edit to modify.
                   </p>
+
+                  {systemChatVisible ? (
+                    <div className="mt-3 grid grid-cols-[1fr_auto] gap-2">
+                      <input
+                        type="text"
+                        placeholder="Ask the system (mini-chatbot)"
+                        className="rounded-sm border border-line bg-panel px-3 py-2 text-sm text-zinc-100 outline-none"
+                        value={systemChatInput}
+                        onChange={(e) => setSystemChatInput(e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (!systemChatInput) return;
+                          // Send a single-shot generation using the system prompt as instruction
+                          setIsRunning(true);
+                          setResponseText("");
+                          setTrace(null);
+                          appendLog("SYSCHAT", `System chat: ${systemChatInput.slice(0, 120)}`);
+                          try {
+                            await streamGeneration(
+                              {
+                                prompt: systemChatInput,
+                                system_prompt: systemPrompt,
+                                max_new_tokens: 80,
+                                temperature: 0.2,
+                                top_p: 0.95,
+                                stop: [],
+                                stream: true,
+                                execution_mode: "auto",
+                                trace_model_name: traceModelName,
+                              },
+                              {
+                                onSession: (event) => {
+                                  startTransition(() => {
+                                    setState((current) => ({
+                                      ...(current ?? emptyState(event.topology)),
+                                      topology: event.topology,
+                                      masked_heads: event.maskedHeads,
+                                      openmetadata: event.openmetadata,
+                                    }));
+                                  });
+                                },
+                                onToken: (event) => {
+                                  setResponseText((current) => current + event.token);
+                                },
+                                onTraceStep: (event) => {
+                                  startTransition(() => {
+                                    setTrace((current) => upsertTrace(current, event.step, systemChatInput, state?.topology ?? null, "auto", state?.ollama_available ?? false));
+                                  });
+                                },
+                                onDone: (event) => {
+                                  handleDoneEvent(event);
+                                },
+                                onError: (event) => {
+                                  setError(event.message);
+                                  appendLog("ERROR", "System chat failed.", event.message);
+                                },
+                              },
+                            );
+
+                            const refreshed = await fetchState();
+                            setState(refreshed);
+                          } catch (err: any) {
+                            const message = err instanceof Error ? err.message : String(err);
+                            setError(message);
+                            appendLog("ERROR", "System chat failed.", message);
+                          } finally {
+                            setIsRunning(false);
+                            setSystemChatInput("");
+                          }
+                        }}
+                        disabled={isRunning || !systemChatInput}
+                        className="rounded-sm border border-accent bg-accent/12 px-3 py-2 text-xs text-accent disabled:cursor-not-allowed disabled:border-line disabled:bg-panel2 disabled:text-muted"
+                      >
+                        Ask
+                      </button>
+                    </div>
+                  ) : null}
                 </label>
 
                 <label className="block">
@@ -795,24 +911,33 @@ export function SynapseDashboard() {
                 </div>
 
                 <div className="mt-2 grid grid-cols-2 gap-2">
-                  <input
-                    type="number"
-                    min={1}
-                    max={20}
-                    placeholder="top_k_heads"
-                    className="rounded-sm border border-line bg-panel px-3 py-2 text-sm text-zinc-100 outline-none"
-                    value={discoverTopK}
-                    onChange={(e) => setDiscoverTopK(clampNumber(Number(e.target.value || 0), 1, 20))}
-                  />
-                  <input
-                    type="number"
-                    min={0}
-                    max={190}
-                    placeholder="max_pair_sweeps"
-                    className="rounded-sm border border-line bg-panel px-3 py-2 text-sm text-zinc-100 outline-none"
-                    value={discoverPairSweeps}
-                    onChange={(e) => setDiscoverPairSweeps(clampNumber(Number(e.target.value || 0), 0, 190))}
-                  />
+                  <label className="block">
+                    <span className="panel-label">Top K</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={20}
+                      placeholder="top_k_heads (number of top heads to test)"
+                      className="mt-2 w-full rounded-sm border border-line bg-panel px-3 py-2 text-sm text-zinc-100 outline-none"
+                      value={discoverTopK}
+                      onChange={(e) => setDiscoverTopK(clampNumber(Number(e.target.value || 0), 1, 20))}
+                    />
+                    <p className="mt-1 text-xs text-muted">Number of top heads to sweep for causal effect.</p>
+                  </label>
+
+                  <label className="block">
+                    <span className="panel-label">Pair Sweeps</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={190}
+                      placeholder="max_pair_sweeps (how many pair combinations to try)"
+                      className="mt-2 w-full rounded-sm border border-line bg-panel px-3 py-2 text-sm text-zinc-100 outline-none"
+                      value={discoverPairSweeps}
+                      onChange={(e) => setDiscoverPairSweeps(clampNumber(Number(e.target.value || 0), 0, 190))}
+                    />
+                    <p className="mt-1 text-xs text-muted">How many head-pair combinations to attempt.</p>
+                  </label>
                 </div>
 
                 {discovery ? (
@@ -884,6 +1009,8 @@ export function SynapseDashboard() {
               selectedLayer={selectedLayer}
               onStateChange={setState}
               appendLog={appendLog}
+              syncDefects={handleSyncDefects}
+              isSyncingDefects={isSyncingDefects}
             />
           </section>
         </div>
@@ -1073,6 +1200,8 @@ function GovernancePanel({
   selectedLayer,
   onStateChange,
   appendLog,
+  syncDefects,
+  isSyncingDefects,
 }: {
   topology: ModelTopology | null;
   maskedHeads: StateResponse["masked_heads"];
@@ -1080,7 +1209,14 @@ function GovernancePanel({
   selectedLayer: LayerActivation | null;
   onStateChange: (state: StateResponse) => void;
   appendLog: (channel: string, message: string, detail?: string) => void;
+  syncDefects?: () => Promise<void>;
+  isSyncingDefects?: boolean;
 }) {
+  syncDefects = syncDefects ?? (async () => {});
+  isSyncingDefects = isSyncingDefects ?? false;
+  const [evidence, setEvidence] = useState<any | null>(null);
+  const [evidenceTableFqn, setEvidenceTableFqn] = useState<string | null>(null);
+  const [isFetchingEvidence, setIsFetchingEvidence] = useState(false);
   const selectedLayerMaskedHeads = selectedLayer
     ? maskedHeads
         .filter((mask) => mask.layer_index === selectedLayer.layer_index)
@@ -1123,6 +1259,52 @@ function GovernancePanel({
     }
   }
 
+  async function handleFetchEvidence() {
+    if (!selectedLayer) return;
+    setIsFetchingEvidence(true);
+    setEvidence(null);
+    try {
+      // Try to fetch catalog detail and resolve a matching table FQN for the selected layer
+      let tableFqn: string | null = null;
+      try {
+        const catalog = await fetchCatalogDetail();
+        const layerTables = Array.isArray(catalog.layer_tables) ? catalog.layer_tables : [];
+        const entry = layerTables.find((lt: any) => lt.layer_index === selectedLayer.layer_index);
+        if (entry && entry.table_fqn) tableFqn = entry.table_fqn;
+      } catch (e) {
+        // ignore and fall back to heuristic
+      }
+
+      if (!tableFqn) {
+        // Best-effort fallback using common runtime defaults
+        const serviceName = "Synapse_Neural_Service";
+        const schemaName = "Transformer_Graph";
+        const dbName = state?.topology?.model_name ?? "gpt2";
+        tableFqn = `${serviceName}.${dbName}.${schemaName}.${selectedLayer.layer_name}`;
+      }
+      setEvidenceTableFqn(tableFqn);
+
+      const parsed = await fetchParsedEvidence(tableFqn);
+      setEvidence(parsed);
+      appendLog("OM", `Fetched parsed evidence for ${tableFqn}`);
+    } catch (err) {
+      appendLog("ERROR", "Failed to fetch parsed evidence.", err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsFetchingEvidence(false);
+    }
+  }
+
+  // Auto-fetch evidence when the selected layer changes so the UI always
+  // shows the latest parsed SYNAPSE_META for the chosen layer.
+  useEffect(() => {
+    if (!selectedLayer) {
+      setEvidence(null);
+      setEvidenceTableFqn(null);
+      return;
+    }
+    void handleFetchEvidence();
+  }, [selectedLayer?.layer_index]);
+
   return (
     <div className="panel-shell rounded-sm p-4">
       <div className="flex items-center justify-between gap-3">
@@ -1137,6 +1319,24 @@ function GovernancePanel({
       </div>
 
       <div className="mt-4 space-y-3">
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={async () => {
+              appendLog("SYNC", "Syncing defects from OpenMetadata...");
+              try {
+                await syncDefects?.();
+                appendLog("SYNC", "Sync defects completed.");
+              } catch (e) {
+                appendLog("ERROR", "Sync defects failed.", String(e));
+              }
+            }}
+            disabled={isSyncingDefects}
+            className="rounded-sm border border-accent/30 bg-accent/8 px-3 py-2 text-xs text-accent disabled:cursor-not-allowed disabled:border-line disabled:bg-panel2 disabled:text-muted"
+          >
+            {isSyncingDefects ? "Syncing..." : "Sync Defects"}
+          </button>
+        </div>
         {state?.openmetadata.last_ingest_error ? (
           <div className="border border-rose-500/30 bg-rose-500/10 p-3">
             <p className="panel-label text-rose-300">OpenMetadata Error</p>
@@ -1184,6 +1384,21 @@ function GovernancePanel({
         </div>
 
         <div className="thin-scrollbar max-h-60 space-y-2 overflow-y-auto border border-line bg-panel2/60 p-3 font-mono text-xs text-zinc-300">
+          {/* OpenMetadata-tagged defective heads */}
+          <div className="border border-line bg-panel/70 p-2">
+            <p className="text-zinc-100">OpenMetadata defective heads: {state?.openmetadata.defective_heads?.length ?? 0}</p>
+            <p className="mt-1 leading-5 text-muted">Heads tagged as `DEFECTIVE` in your OpenMetadata catalog.</p>
+            {state?.openmetadata.defective_heads?.length ? (
+              <div className="mt-2 flex gap-2 flex-wrap">
+                {state?.openmetadata.defective_heads.map((h) => (
+                  <span key={`${h.layer_index}-${h.head_index}`} className="metric-mono border border-accent/25 bg-accent/8 px-2 py-1 text-[11px] text-accent">
+                    {h.layer_name}:{h.head_name}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </div>
+
           <div className="border border-line bg-panel/70 p-2">
             <p className="text-zinc-100">Runtime mask list: {maskedHeads.length}</p>
             <p className="mt-1 leading-5 text-muted">
@@ -1191,12 +1406,108 @@ function GovernancePanel({
               The current trace only shows them after you run again.
             </p>
           </div>
+
           {maskedHeads.length === 0 ? (
             <p className="leading-5 text-muted">
               No heads are currently quarantined. Tag a head/layer as `DEFECTIVE` in
               OpenMetadata, sync defects, or use Quarantine Top Head for a local demo mask.
             </p>
           ) : null}
+          <div className="mt-3 border border-line bg-panel/70 p-2">
+            <div className="flex items-center justify-between">
+              <p className="text-zinc-100">Lineage Evidence</p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handleFetchEvidence()}
+                  disabled={!selectedLayer || isFetchingEvidence}
+                  className="rounded-sm border border-accent/30 bg-accent/8 px-2 py-1 text-xs text-accent disabled:cursor-not-allowed disabled:border-line disabled:bg-panel2 disabled:text-muted"
+                >
+                  {isFetchingEvidence ? "Fetching..." : "Fetch Evidence"}
+                </button>
+              </div>
+            </div>
+            <p className="mt-1 text-xs text-muted">Retrieve parsed `SYNAPSE_META` evidence for the selected layer from OpenMetadata.</p>
+            {evidence ? (
+              <div className="mt-2 space-y-2">
+                <p className="text-xs text-muted">Queried table: {evidence.table_fqn ?? evidenceTableFqn}</p>
+                {evidence.edges?.length ? (
+                  evidence.edges.map((edge: any, idx: number) => (
+                    <div key={idx} className="p-3 bg-panel border border-line rounded-sm flex items-start gap-4">
+                      <div className="flex-1">
+                        <p className="text-sm text-accent">{edge.from ?? 'unknown'} → {edge.to ?? 'unknown'}</p>
+                        {edge.synapse_meta ? (
+                          <div className="mt-2 text-xs text-muted space-y-1">
+                            <div><strong>session:</strong> {edge.synapse_meta.session_id}</div>
+                            <div><strong>step:</strong> {String(edge.synapse_meta.step_index)}</div>
+                            <div><strong>activation_path:</strong> {Array.isArray(edge.synapse_meta.activation_path) ? edge.synapse_meta.activation_path.join(' → ') : String(edge.synapse_meta.activation_path)}</div>
+                            <div><strong>evidence_tokens:</strong> {Array.isArray(edge.synapse_meta.evidence_tokens) ? edge.synapse_meta.evidence_tokens.join(', ') : String(edge.synapse_meta.evidence_tokens)}</div>
+                            {edge.synapse_meta.explanation ? (
+                              <div className="mt-1"><strong>explanation:</strong> {truncateText(edge.synapse_meta.explanation, 220)}</div>
+                            ) : null}
+                          </div>
+                        ) : (
+                          <p className="mt-1 text-xs text-muted">No synapse_meta parsed from this edge.</p>
+                        )}
+
+                        {edge.columnsLineage ? (
+                          <div className="mt-2 text-xs text-muted">
+                            <strong>Columns Lineage:</strong>
+                            {Array.isArray(edge.columnsLineage) && edge.columnsLineage.length ? (
+                              <ul className="list-disc ml-4 mt-1">
+                                {edge.columnsLineage.map((c: any, ci: number) => (
+                                  <li key={ci} className="text-xs">
+                                    <span className="font-mono">{c.toColumn}</span> ← {Array.isArray(c.fromColumns) ? c.fromColumns.join(', ') : String(c.fromColumns)}
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <div className="mt-1 text-xs text-muted">None</div>
+                            )}
+                          </div>
+                        ) : null}
+                      </div>
+
+                      <div className="flex flex-col gap-2">
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              const payload = JSON.stringify(edge.synapse_meta ?? edge, null, 2);
+                              await navigator.clipboard.writeText(payload);
+                              appendLog('OM', 'Copied evidence to clipboard');
+                            } catch (e) {
+                              appendLog('ERROR', 'Copy failed', String(e));
+                            }
+                          }}
+                          className="rounded-sm border border-line px-2 py-1 text-xs"
+                        >
+                          Copy
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              const payload = JSON.stringify(edge, null, 2);
+                              await navigator.clipboard.writeText(payload);
+                              appendLog('OM', 'Copied raw edge to clipboard');
+                            } catch (e) {
+                              appendLog('ERROR', 'Copy failed', String(e));
+                            }
+                          }}
+                          className="rounded-sm border border-line px-2 py-1 text-xs"
+                        >
+                          Copy Raw
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <p className="mt-2 text-xs text-muted">No lineage edges returned for this layer.</p>
+                )}
+              </div>
+            ) : null}
+          </div>
           {maskedHeads.map((mask) => (
             <div key={`${mask.layer_index}-${mask.head_index}`} className="border border-line p-2">
               <p className="text-accent">

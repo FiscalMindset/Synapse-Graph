@@ -958,6 +958,24 @@ class HookedTransformerRunner:
     def _render_prompt(self, prompt: str, system_prompt: str | None) -> str:
         tokenizer = self._require_tokenizer()
 
+        # Guard: if the system prompt is effectively the same as the user prompt,
+        # drop it to avoid degenerate/echoing behavior (users sometimes paste the
+        # same question into both fields).
+        if system_prompt and prompt:
+            try:
+                sim = difflib.SequenceMatcher(
+                    None, system_prompt.strip().lower(), prompt.strip().lower()
+                ).ratio()
+                if sim > 0.9:
+                    LOGGER.warning(
+                        "Dropping system_prompt because it closely matches user prompt (similarity=%.3f).",
+                        sim,
+                    )
+                    system_prompt = None
+            except Exception:
+                # best-effort similarity check; if it fails, continue normally
+                pass
+
         if self._settings.hf_enable_chat_template and getattr(tokenizer, "chat_template", None):
             messages: list[dict[str, str]] = []
             if system_prompt:

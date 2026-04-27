@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from urllib.parse import quote
 
 from .inference import (
     AttentionTrace,
@@ -1009,10 +1010,24 @@ class NeuralProxyRuntime:
             await self.openmetadata.ingest_step(catalog, session_id, prompt, step)
             self._openmetadata_connected = True
             self._last_ingest_error = None
+            return
         except Exception as exc:
             self._last_ingest_error = str(exc)
             self._openmetadata_connected = False
-            LOGGER.exception("OpenMetadata lineage ingestion failed.")
+            LOGGER.exception("OpenMetadata lineage ingestion failed on first attempt.")
+
+        # Retry once: attempt to refresh topology/catalog and replay the ingest.
+        try:
+            LOGGER.info("Attempting OpenMetadata catalog refresh and retrying lineage ingest.")
+            topology, refreshed_catalog = await self.ensure_topology()
+            if refreshed_catalog is not None:
+                await self.openmetadata.ingest_step(refreshed_catalog, session_id, prompt, step)
+                self._openmetadata_connected = True
+                self._last_ingest_error = None
+                LOGGER.info("OpenMetadata lineage ingest succeeded after catalog refresh.")
+                return
+        except Exception:
+            LOGGER.exception("OpenMetadata lineage ingestion retry failed.")
 
     def _openmetadata_status(self, *, catalog_ready: bool) -> OpenMetadataStatus:
         return OpenMetadataStatus(
@@ -1071,6 +1086,347 @@ async def bootstrap_openmetadata() -> StateResponse:
         ollama_available=await runtime.inference.is_ollama_available(),
         openmetadata=runtime._openmetadata_status(catalog_ready=catalog is not None),
     )
+
+
+@app.get("/api/v1/openmetadata/inspect")
+async def inspect_openmetadata() -> dict[str, Any]:
+    """Return debug payloads from OpenMetadata for the prompt table.
+
+    Useful to verify that the catalog exists and to inspect tags/columns.
+    """
+    topology, catalog = await runtime.ensure_topology()
+    if not runtime.openmetadata_settings.openmetadata_enabled:
+        raise HTTPException(status_code=400, detail="OpenMetadata is not enabled in the runtime settings.")
+
+    if catalog is None:
+        return {
+            "catalog_ready": False,
+            "openmetadata": runtime._openmetadata_status(catalog_ready=False).model_dump(mode="json"),
+            "message": "Catalog not available; run /api/v1/openmetadata/bootstrap",
+        }
+
+    # Fetch the prompt table payload (columns, tags)
+    payload = await runtime.openmetadata._fetch_table_payload(catalog.prompt_table.table_fqn)
+    return {
+        "catalog_ready": True,
+        "prompt_table_fqn": catalog.prompt_table.table_fqn,
+        "prompt_table_payload": payload,
+        "openmetadata": runtime._openmetadata_status(catalog_ready=True).model_dump(mode="json"),
+    }
+
+
+@app.get("/api/v1/openmetadata/catalog-detail")
+async def inspect_openmetadata_catalog_detail() -> dict[str, Any]:
+    """Return detailed payloads for all layer tables in the catalog.
+
+    Useful to verify column-level tags (DEFECTIVE) were applied after quarantine.
+    """
+    topology, catalog = await runtime.ensure_topology()
+    if not runtime.openmetadata_settings.openmetadata_enabled:
+        raise HTTPException(status_code=400, detail="OpenMetadata is not enabled in the runtime settings.")
+
+    if catalog is None:
+        return {
+            "catalog_ready": False,
+            "openmetadata": runtime._openmetadata_status(catalog_ready=False).model_dump(mode="json"),
+            "message": "Catalog not available; run /api/v1/openmetadata/bootstrap",
+        }
+
+    results: list[dict[str, Any]] = []
+    for layer in catalog.layer_tables:
+        payload = await runtime.openmetadata._fetch_table_payload(layer.table_fqn)
+        results.append(
+            {
+                "table_fqn": layer.table_fqn,
+                "layer_index": layer.layer_index,
+                "payload": payload,
+            }
+        )
+
+    return {
+        "catalog_ready": True,
+        "layer_tables": results,
+        "openmetadata": runtime._openmetadata_status(catalog_ready=True).model_dump(mode="json"),
+    }
+
+
+@app.get("/api/v1/openmetadata/table-payload")
+async def fetch_table_payload(table_fqn: str, fields: str = "columns,tags") -> dict[str, Any]:
+    """Fetch a table payload from OpenMetadata with selectable `fields`.
+
+    Use `fields=lineage,columns,tags` to include lineage details when available.
+    """
+    if not runtime.openmetadata_settings.openmetadata_enabled:
+        raise HTTPException(status_code=400, detail="OpenMetadata is not enabled in the runtime settings.")
+
+    try:
+        response = await runtime.openmetadata._request_with_managed_auth(
+            "GET",
+            f"/v1/tables/name/{quote(table_fqn, safe='')}",
+            params={"fields": fields},
+        )
+        response.raise_for_status()
+    except Exception as e:
+        LOGGER.exception("Failed to fetch table payload (fields=%s) for %s", fields, table_fqn)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return response.json()
+
+
+@app.get("/api/v1/openmetadata/lineage")
+async def proxy_openmetadata_lineage(table_fqn: str, direction: str = "both") -> dict[str, Any]:
+    """Proxy OpenMetadata lineage API for a table and return raw lineage JSON.
+
+    Example: /api/v1/openmetadata/lineage?table_fqn=Synapse_Neural_Service.gpt2.Transformer_Graph.Layer_10
+    """
+    if not runtime.openmetadata_settings.openmetadata_enabled:
+        raise HTTPException(status_code=400, detail="OpenMetadata is not enabled in the runtime settings.")
+
+    topology, catalog = await runtime.ensure_topology()
+    if catalog is None:
+        raise HTTPException(status_code=404, detail="Catalog not available; run /api/v1/openmetadata/bootstrap")
+
+    # Use the OpenMetadata HTTP client to call the lineage endpoint with managed auth
+    # Try the table-specific lineage endpoint first, then fall back to the
+    # generic query-style endpoint which some OM versions expect.
+    last_error: Exception | None = None
+    try:
+        path = f"/v1/lineage/table/{quote(table_fqn, safe='')}"
+        response = await runtime.openmetadata._request_with_managed_auth("GET", path, params={"direction": direction})
+        if response.status_code < 400:
+            return response.json()
+        last_error = RuntimeError(f"Lineage table endpoint returned {response.status_code}")
+    except Exception as exc:
+        last_error = exc
+
+    # Fallback: query-style endpoint
+    # Try a couple of query parameter name variants for different OM versions.
+    for param_name in ("fqn", "fullyQualifiedName"):
+        try:
+            path = f"/v1/lineage"
+            response = await runtime.openmetadata._request_with_managed_auth(
+                "GET",
+                path,
+                params={"entity": "table", param_name: table_fqn, "direction": direction},
+            )
+            if response.status_code < 400:
+                return response.json()
+            last_error = RuntimeError(f"Lineage query endpoint returned {response.status_code} for param {param_name}")
+        except Exception as exc:
+            last_error = exc
+    LOGGER.exception("Failed to fetch lineage (both endpoints) from OpenMetadata for %s", table_fqn)
+    raise HTTPException(status_code=500, detail=str(last_error))
+
+
+@app.get("/api/v1/openmetadata/lineage-sdk")
+async def proxy_openmetadata_lineage_sdk(table_fqn: str, up_depth: int = 1, down_depth: int = 1) -> dict[str, Any]:
+    """Fetch lineage using the OpenMetadata SDK (authenticated client).
+
+    This avoids REST compatibility issues by calling the SDK method
+    `get_lineage_by_name` which returns a parsed lineage payload.
+    """
+    try:
+        metadata = runtime.openmetadata._metadata_client()
+        lineage = metadata.get_lineage_by_name("table", table_fqn, up_depth=up_depth, down_depth=down_depth)
+        return lineage or {}
+    except Exception as exc:
+        LOGGER.exception("OpenMetadata SDK lineage fetch failed for %s", table_fqn)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/api/v1/openmetadata/parsed-evidence")
+async def parsed_evidence(table_fqn: str, up_depth: int = 1, down_depth: int = 1) -> dict[str, Any]:
+    """Return parsed `SYNAPSE_META` JSON blobs from lineage edges returned by the SDK.
+
+    This provides a dashboard-friendly payload that surfaces causal evidence even
+    when the OpenMetadata web UI hasn't indexed or displayed the edges yet.
+    """
+    if not runtime.openmetadata_settings.openmetadata_enabled:
+        raise HTTPException(status_code=400, detail="OpenMetadata is not enabled in the runtime settings.")
+
+    try:
+        metadata = runtime.openmetadata._metadata_client()
+        lineage = metadata.get_lineage_by_name("table", table_fqn, up_depth=up_depth, down_depth=down_depth)
+    except Exception as exc:
+        LOGGER.exception("OpenMetadata SDK lineage fetch failed for parsed-evidence %s", table_fqn)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    # Build id->fqn mapping when available to make results human-friendly
+    id_to_fqn: dict[str, str] = {}
+    try:
+        # Map node id -> fullyQualifiedName
+        for node in (lineage.get("nodes") or []):
+            nid = node.get("id")
+            if nid:
+                id_to_fqn[str(nid)] = node.get("fullyQualifiedName") or node.get("name") or str(nid)
+        # Also map the root entity if present
+        root_entity = lineage.get("entity")
+        if isinstance(root_entity, dict):
+            rid = root_entity.get("id")
+            if rid:
+                id_to_fqn[str(rid)] = root_entity.get("fullyQualifiedName") or root_entity.get("name") or str(rid)
+    except Exception:
+        pass
+
+    def _collect_edges(obj: Any) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+
+        if isinstance(obj, dict):
+            # Check for an inline lineageDetails block
+            ld = None
+            if "lineageDetails" in obj and isinstance(obj.get("lineageDetails"), dict):
+                ld = obj.get("lineageDetails")
+                parent = obj
+            elif "edge" in obj and isinstance(obj.get("edge"), dict) and isinstance(obj["edge"].get("lineageDetails"), dict):
+                ld = obj["edge"].get("lineageDetails")
+                parent = obj["edge"]
+
+            if ld is not None:
+                sql = ld.get("sqlQuery")
+                columns_lineage = ld.get("columnsLineage")
+                # Attempt to extract simple from/to identifiers when present
+                from_ent = None
+                to_ent = None
+                if isinstance(parent.get("fromEntity"), dict):
+                    raw_from = parent.get("fromEntity").get("fullyQualifiedName") or parent.get("fromEntity").get("id")
+                    from_ent = id_to_fqn.get(str(raw_from), raw_from)
+                elif isinstance(parent.get("fromEntity"), (str, int)):
+                    raw_from = parent.get("fromEntity")
+                    from_ent = id_to_fqn.get(str(raw_from), raw_from)
+
+                if isinstance(parent.get("toEntity"), dict):
+                    raw_to = parent.get("toEntity").get("fullyQualifiedName") or parent.get("toEntity").get("id")
+                    to_ent = id_to_fqn.get(str(raw_to), raw_to)
+                elif isinstance(parent.get("toEntity"), (str, int)):
+                    raw_to = parent.get("toEntity")
+                    to_ent = id_to_fqn.get(str(raw_to), raw_to)
+
+                parsed_meta = None
+                if isinstance(sql, str):
+                    import re, json as _json
+
+                    m = re.search(r"/\*\s*SYNAPSE_META:\s*(\{.*?\})\s*\*/", sql, flags=re.DOTALL)
+                    if m:
+                        try:
+                            parsed_meta = _json.loads(m.group(1))
+                        except Exception:
+                            parsed_meta = {"_parse_error": "invalid json", "raw": m.group(1)}
+
+                results.append(
+                    {
+                        "from": from_ent,
+                        "to": to_ent,
+                        "description": parent.get("description") or None,
+                        "sqlQuery": sql,
+                        "columnsLineage": columns_lineage,
+                        "synapse_meta": parsed_meta,
+                    }
+                )
+
+            for v in obj.values():
+                results.extend(_collect_edges(v))
+
+        elif isinstance(obj, list):
+            for item in obj:
+                results.extend(_collect_edges(item))
+
+        return results
+
+    edges = _collect_edges(lineage)
+    return {"table_fqn": table_fqn, "edges": edges, "raw_lineage": lineage}
+
+
+@app.post("/api/v1/openmetadata/mark-lineage-processed")
+async def mark_lineage_processed(table_fqns: list[str]) -> dict[str, Any]:
+    """Best-effort attempts to mark lineage processed and trigger reindexing in OpenMetadata.
+
+    This endpoint tries several strategies (SDK helpers if present, REST PATCH on table,
+    and reindex-like REST calls) and returns a diagnostic report so you can see what
+    succeeded against your OpenMetadata deployment.
+    """
+    if not runtime.openmetadata_settings.openmetadata_enabled:
+        raise HTTPException(status_code=400, detail="OpenMetadata is not enabled in the runtime settings.")
+
+    results: list[dict[str, Any]] = []
+    metadata = runtime.openmetadata._metadata_client()
+
+    for table_fqn in table_fqns:
+        entry: dict[str, Any] = {"table_fqn": table_fqn, "attempts": []}
+        success = False
+
+        # Strategy A: call common SDK helper names if available (best-effort)
+        sdk_candidates = [
+            "patch_lineage_processed_flag",
+            "patch_lineage_processed",
+            "patch_lineage",
+            "patchProcessedLineage",
+            "patch_lineage_processed_flag_by_name",
+        ]
+        for name in sdk_candidates:
+            fn = getattr(metadata, name, None)
+            if callable(fn):
+                # Try several common arities for SDK helper methods (best-effort)
+                tried = False
+                for candidate_args in (("table", table_fqn, True), ("table", table_fqn), (table_fqn, True), (table_fqn,)):
+                    try:
+                        await asyncio.to_thread(fn, *candidate_args)
+                        entry["attempts"].append({"method": name, "status": "ok", "args": candidate_args})
+                        success = True
+                        tried = True
+                        break
+                    except TypeError as exc:
+                        # Signature mismatch; record and try next arity
+                        entry["attempts"].append({"method": name, "error": str(exc), "args": candidate_args})
+                        tried = True
+                        continue
+                    except Exception as exc:
+                        entry["attempts"].append({"method": name, "error": str(exc), "args": candidate_args})
+                        tried = True
+                        break
+                if tried and success:
+                    break
+
+        # Strategy B: PATCH the table entity with processedLineage flag (some OM versions accept this)
+        if not success:
+            try:
+                resp = await runtime.openmetadata._request_with_managed_auth(
+                    "PATCH",
+                    f"/v1/tables/name/{quote(table_fqn, safe='')}",
+                    json={"processedLineage": True},
+                )
+                if resp.status_code < 400:
+                    entry["attempts"].append({"method": "rest_patch_table", "status": "ok", "http_status": resp.status_code})
+                    success = True
+                else:
+                    entry["attempts"].append({"method": "rest_patch_table", "status": "error", "http_status": resp.status_code, "body": (resp.text or '')[:800]})
+            except Exception as exc:
+                entry["attempts"].append({"method": "rest_patch_table", "error": str(exc)})
+
+        # Strategy C: Try to trigger a reindex/search update (best-effort)
+        try:
+            resp = await runtime.openmetadata._request_with_managed_auth("POST", "/v1/search/index", json={"query": table_fqn})
+            if resp.status_code < 400:
+                entry["attempts"].append({"method": "reindex_search_index", "status": "ok", "http_status": resp.status_code})
+            else:
+                entry["attempts"].append({"method": "reindex_search_index", "status": "error", "http_status": resp.status_code, "body": (resp.text or '')[:800]})
+        except Exception as exc:
+            entry["attempts"].append({"method": "reindex_search_index", "error": str(exc)})
+
+        # Strategy D: POST to lineage endpoint to ask the server to process (some versions accept different shapes)
+        try:
+            resp = await runtime.openmetadata._request_with_managed_auth("POST", "/v1/lineage", json={"entity": "table", "fqn": table_fqn, "processed": True})
+            if resp.status_code < 400:
+                entry["attempts"].append({"method": "post_lineage_processed", "status": "ok", "http_status": resp.status_code})
+                success = True
+            else:
+                entry["attempts"].append({"method": "post_lineage_processed", "status": "error", "http_status": resp.status_code, "body": (resp.text or '')[:800]})
+        except Exception as exc:
+            entry["attempts"].append({"method": "post_lineage_processed", "error": str(exc)})
+
+        entry["success"] = success
+        results.append(entry)
+
+    return {"results": results}
 
 
 @app.post("/api/v1/openmetadata/sync-defects", response_model=StateResponse)

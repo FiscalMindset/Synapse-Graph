@@ -343,3 +343,28 @@ function parseEventChunk(chunk: string): { event: string; data: unknown } | null
     data: JSON.parse(dataLines.join("\n")),
   };
 }
+
+export async function fetchCatalogDetail(): Promise<any> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/openmetadata/catalog-detail`, {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error(`Catalog detail request failed: ${response.status}`);
+  }
+
+  return await response.json();
+}
+
+export async function fetchParsedEvidence(table_fqn: string): Promise<any> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/v1/openmetadata/parsed-evidence?table_fqn=${encodeURIComponent(table_fqn)}`,
+    { cache: "no-store" },
+  );
+
+  if (!response.ok) {
+    throw new Error(`Parsed evidence request failed: ${response.status}`);
+  }
+
+  return await response.json();
+}

@@ -4,6 +4,7 @@ import asyncio
 import base64
 import logging
 import re
+import json
 from datetime import datetime, timedelta, timezone
 from threading import Lock
 from typing import Any
@@ -325,7 +326,12 @@ class OpenMetadataNeuralMapper:
             except Exception:
                 LOGGER.exception("Failed to apply defective tag for table %s", table_fqn)
 
+        if applied:
+            LOGGER.info("Applied %d defective tags in OpenMetadata: %s", len(applied), [f"{a.layer_name}:{a.head_name}" for a in applied])
+        else:
+            LOGGER.debug("No defective tags applied to OpenMetadata for requested pairs.")
         return applied
+        
 
     async def ingest_step(
         self,
@@ -608,26 +614,48 @@ class OpenMetadataNeuralMapper:
     ) -> None:
         if not source_columns or not target_columns:
             return
-
-        lineage_request = AddLineageRequest(
-            edge=EntitiesEdge(
-                description=description,
-                fromEntity=EntityReference(id=source_table.table_id, type="table"),
-                toEntity=EntityReference(id=target_table.table_id, type="table"),
-                lineageDetails=LineageDetails(
-                    sqlQuery=sql_query,
-                    columnsLineage=[
-                        ColumnLineage(
-                            fromColumns=source_columns,
-                            toColumn=target_column,
-                        )
-                        for target_column in target_columns
-                    ],
-                ),
+        # Build minimal debug-friendly descriptor for logging
+        try:
+            LOGGER.debug(
+                "Adding lineage edge %s -> %s columns=%s->%s",
+                source_table.table_fqn,
+                target_table.table_fqn,
+                source_columns,
+                target_columns,
             )
-        )
 
-        metadata.add_lineage(data=lineage_request)
+            lineage_request = AddLineageRequest(
+                edge=EntitiesEdge(
+                    description=description,
+                    fromEntity=EntityReference(id=source_table.table_id, type="table"),
+                    toEntity=EntityReference(id=target_table.table_id, type="table"),
+                    lineageDetails=LineageDetails(
+                        sqlQuery=sql_query,
+                        columnsLineage=[
+                            ColumnLineage(
+                                fromColumns=source_columns,
+                                toColumn=target_column,
+                            )
+                            for target_column in target_columns
+                        ],
+                    ),
+                )
+            )
+
+            metadata.add_lineage(data=lineage_request)
+            LOGGER.info(
+                "OpenMetadata lineage added: %s -> %s (cols %d -> %d)",
+                source_table.table_fqn,
+                target_table.table_fqn,
+                len(source_columns),
+                len(target_columns),
+            )
+        except Exception:
+            LOGGER.exception(
+                "Failed to add lineage edge to OpenMetadata for %s -> %s",
+                source_table.table_fqn,
+                target_table.table_fqn,
+            )
 
     async def _fetch_table_payload(self, table_fqn: str) -> dict[str, Any] | None:
         try:
@@ -709,10 +737,26 @@ class OpenMetadataNeuralMapper:
             await asyncio.to_thread(self._ensure_access_token_sync)
         response = await self._client.request(method, path, **kwargs)
 
+        # If unauthorized, try to refresh token once (password flow only)
         if response.status_code == 401 and self._uses_password_login():
+            LOGGER.warning("OpenMetadata request unauthorized, attempting token refresh: %s %s", method, path)
             await asyncio.to_thread(self._invalidate_access_token_sync)
             await asyncio.to_thread(self._ensure_access_token_sync)
             response = await self._client.request(method, path, **kwargs)
+
+        # Log non-success responses for easier debugging (truncate body)
+        if response.status_code >= 400:
+            try:
+                body = (response.text or "")[:400]
+            except Exception:
+                body = "<unreadable>"
+            LOGGER.warning(
+                "OpenMetadata HTTP %s %s -> %s; body=%s",
+                method,
+                path,
+                response.status_code,
+                body,
+            )
 
         return response
 
@@ -867,18 +911,36 @@ def _build_synthetic_sql(
     step: TokenStepCapture,
     target_name: str,
 ) -> str:
+    # Human-readable preview fields
     prompt_preview = prompt.replace("\n", " ")[:160]
-    activation_path = " -> ".join(step.high_activation_path[:6]) or "n/a"
-    evidence_tokens = ", ".join(step.evidence_tokens[:6]) or "n/a"
+    activation_path = step.high_activation_path[:6] or ["n/a"]
+    evidence_tokens = step.evidence_tokens[:6] or ["n/a"]
     explanation = (step.explanation or "n/a").replace("\n", " ")[:220]
+
+    # Structured metadata to embed in the lineage record so OpenMetadata UI
+    # or custom consumers can parse causal evidence easily.
+    meta = {
+        "session_id": session_id,
+        "step_index": int(step.step_index),
+        "target": target_name,
+        "prompt_preview": prompt_preview,
+        "activation_path": activation_path,
+        "evidence_tokens": evidence_tokens,
+        "explanation": explanation,
+    }
+    meta_json = json.dumps(meta, ensure_ascii=False)
+
+    # Embed both a compact JSON blob and legacy human-readable comments for
+    # maximum compatibility with OpenMetadata's lineage UI.
     return (
+        f"/* SYNAPSE_META: {meta_json} */\n"
         f"-- Synapse-Graph synthetic lineage\n"
         f"-- session={session_id}\n"
         f"-- step={step.step_index}\n"
         f"-- target={target_name}\n"
         f"-- prompt={prompt_preview}\n"
-        f"-- path={activation_path}\n"
-        f"-- evidence_tokens={evidence_tokens}\n"
+        f"-- path={' -> '.join(str(p) for p in activation_path)}\n"
+        f"-- evidence_tokens={', '.join(str(t) for t in evidence_tokens)}\n"
         f"-- explanation={explanation}\n"
         f"SELECT neural_signal FROM previous_state INTO {target_name};"
     )
