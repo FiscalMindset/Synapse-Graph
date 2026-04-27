@@ -33,40 +33,107 @@
 
 ---
 
+<div style="background: linear-gradient(135deg, rgba(96,212,255,0.08), rgba(62,225,255,0.05)); border: 1px solid rgba(96,212,255,0.25); border-radius: 12px; padding: 32px 24px; margin: 24px 0; backdrop-filter: blur(10px); box-shadow: 0 8px 24px rgba(96,212,255,0.08);">
+
 ## 💡 The Motivation: Breaking the Black Box
 
 The idea for Synapse-Graph came from a deep frustration with current AI observability tools. Today, if an LLM hallucinates or goes off-script, developers only have two terrible options:
 
-1. **Prompt Engineering:** Begging the AI to behave in the system prompt.
-2. **Retraining/Fine-tuning:** Spending thousands of dollars on compute to train the bad behavior out.
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 20px 0;">
 
-Current observability platforms (like LangSmith or Arize) only look at the *surface*—prompts, tokens, and latency. They treat the AI like a black box. I wanted to build a tool that treats the AI like an engine. If a spark plug misfires, you don't replace the whole car; you find the exact spark plug and fix it.
+<div style="background: rgba(15,25,45,0.6); border-left: 3px solid #60d4ff; border-radius: 8px; padding: 16px; backdrop-filter: blur(10px);">
+<strong style="color: #60d4ff;">❌ Prompt Engineering</strong>
+<div style="color: #a0b0c8; font-size: 0.95em; margin-top: 8px;">Begging the AI to behave in the system prompt</div>
+</div>
 
-I realized that if we could apply **Mechanistic Interpretability** (finding the exact neural circuits causing a behavior) and tie it to **Enterprise Data Governance** (OpenMetadata), we could fix hallucinations in real-time, at zero cost, without retraining.
+<div style="background: rgba(15,25,45,0.6); border-left: 3px solid #ff6b6b; border-radius: 8px; padding: 16px; backdrop-filter: blur(10px);">
+<strong style="color: #ff6b6b;">💸 Retraining/Fine-tuning</strong>
+<div style="color: #a0b0c8; font-size: 0.95em; margin-top: 8px;">Spending thousands of dollars on compute</div>
+</div>
+
+</div>
+
+Current observability platforms (like LangSmith or Arize) only look at the *surface*—prompts, tokens, and latency. They treat the AI like a **black box**. I wanted to build a tool that treats the AI like an **engine**. 
+
+<div style="background: rgba(62,225,255,0.1); border: 1px solid rgba(96,212,255,0.3); border-radius: 10px; padding: 16px; margin: 20px 0; color: #e6eef8;">
+<strong style="color: #3ee1ff;">🔧 The Core Insight:</strong> If a spark plug misfires, you don't replace the whole car; you find the <span style="color: #60d4ff; font-weight: 600;">exact spark plug</span> and fix it.
+</div>
+
+I realized that if we could apply **Mechanistic Interpretability** (finding the exact neural circuits causing a behavior) and tie it to **Enterprise Data Governance** (OpenMetadata), we could **fix hallucinations in real-time, at zero cost, without retraining**.
+
+</div>
 
 ---
 
+<div style="background: linear-gradient(135deg, rgba(57,255,20,0.08), rgba(96,212,255,0.05)); border: 1px solid rgba(57,255,20,0.25); border-radius: 12px; padding: 32px 24px; margin: 24px 0; backdrop-filter: blur(10px); box-shadow: 0 8px 24px rgba(57,255,20,0.08);">
+
 ## ⚙️ Engineering Philosophy: How It Actually Works
 
-To achieve live neural surgery, Synapse-Graph abandons standard API wrappers and operates directly on the model's tensors. We solved this using a three-part engineering architecture:
+To achieve live neural surgery, Synapse-Graph abandons standard API wrappers and operates directly on the model's tensors. We solved this using a **three-part engineering architecture**:
 
-### 1. 🔍 The PyTorch Shadow Tracer (The Telemetry)
+<div style="display: grid; grid-template-columns: 1fr; gap: 16px; margin: 24px 0;">
 
-Instead of just reading the final output, we inject `register_forward_hook` directly into the attention modules of the loaded Hugging Face model. As the generation runs, we extract the exact multi-dimensional attention activations (Layer-by-Layer, Head-by-Head) without slowing down the inference.
+<div style="background: linear-gradient(135deg, rgba(96,212,255,0.1), rgba(62,225,255,0.05)); border: 1px solid rgba(96,212,255,0.3); border-radius: 10px; padding: 20px; backdrop-filter: blur(10px); transition: all 0.3s ease;">
 
-### 2. 🛡️ The OpenMetadata Hack (The Governance)
+### 🔍 Part 1: The PyTorch Shadow Tracer (The Telemetry)
 
-AI neural networks don't fit into standard data catalogs. We engineered a synthetic topology mapper that translates a live neural network into a SQL database format:
+Instead of just reading the final output, we inject `register_forward_hook` directly into the attention modules of the loaded Hugging Face model. As the generation runs, we **extract the exact multi-dimensional attention activations** (Layer-by-Layer, Head-by-Head) **without slowing down the inference**.
 
-- **Model** = Database
-- **Transformer Layers** = Tables
-- **Attention Heads** = Columns
+<div style="background: rgba(0,0,0,0.3); border-left: 3px solid #3ee1ff; border-radius: 6px; padding: 12px; margin-top: 12px; font-family: 'Courier New', monospace; font-size: 0.9em; color: #60d4ff;">
+Hook captures: Attention weights + Projection output → Zero overhead
+</div>
 
-This allows us to track "Thought Lineage" as standard data lineage edges, and use enterprise tagging to flag specific neurons.
+</div>
 
-### 3. ⚡ Causal Ablation (The Surgery)
+<div style="background: linear-gradient(135deg, rgba(57,255,20,0.1), rgba(96,212,255,0.05)); border: 1px solid rgba(57,255,20,0.3); border-radius: 10px; padding: 20px; backdrop-filter: blur(10px); transition: all 0.3s ease;">
 
-Correlation is not causation. To prove a specific head is causing a hallucination, our backend runs an automated $O(n^2)$ Ablation Sweep. We systematically zero out suspect heads (multiplying their projection matrices by `0.0`) and measure the drop in hallucination probability. Once the causal head is found, an operator tags it as `DEFECTIVE` in OpenMetadata, and our FastAPI proxy permanently masks it on all future runs.
+### 🛡️ Part 2: The OpenMetadata Hack (The Governance)
+
+AI neural networks don't fit into standard data catalogs. We engineered a **synthetic topology mapper** that translates a live neural network into a SQL database format:
+
+<div style="background: rgba(0,0,0,0.3); border-radius: 8px; padding: 16px; margin-top: 12px;">
+
+<table style="width: 100%; color: #e6eef8; border-collapse: collapse;">
+<tr style="border-bottom: 1px solid rgba(57,255,20,0.2);">
+<td style="padding: 8px 12px; font-weight: 600; color: #60d4ff;">Model</td>
+<td style="padding: 8px 12px;">→ Database</td>
+</tr>
+<tr style="border-bottom: 1px solid rgba(57,255,20,0.2);">
+<td style="padding: 8px 12px; font-weight: 600; color: #60d4ff;">Transformer Layers</td>
+<td style="padding: 8px 12px;">→ Tables</td>
+</tr>
+<tr>
+<td style="padding: 8px 12px; font-weight: 600; color: #60d4ff;">Attention Heads</td>
+<td style="padding: 8px 12px;">→ Columns</td>
+</tr>
+</table>
+
+</div>
+
+This allows us to track **"Thought Lineage"** as standard data lineage edges, and use enterprise tagging to flag specific neurons.
+
+</div>
+
+<div style="background: linear-gradient(135deg, rgba(255,107,107,0.1), rgba(255,137,137,0.05)); border: 1px solid rgba(255,107,107,0.3); border-radius: 10px; padding: 20px; backdrop-filter: blur(10px); transition: all 0.3s ease;">
+
+### ⚡ Part 3: Causal Ablation (The Surgery)
+
+**Correlation is not causation.** To prove a specific head is causing a hallucination, our backend runs an automated **$O(n^2)$ Ablation Sweep**:
+
+1. Systematically **zero out suspect heads** (multiply their projection matrices by `0.0`)
+2. Measure the **drop in hallucination probability**
+3. Once the causal head is found, tag it as `⛔ DEFECTIVE` in OpenMetadata
+4. Our FastAPI proxy **permanently masks it** on all future runs
+
+<div style="background: rgba(0,0,0,0.3); border-left: 3px solid #ff6b6b; border-radius: 6px; padding: 12px; margin-top: 12px; font-family: 'Courier New', monospace; font-size: 0.9em; color: #ff8787;">
+Cost: $0 (no retraining) | Time: Minutes | Precision: Exact neural circuit
+</div>
+
+</div>
+
+</div>
+
+</div>
 
 ---
 
